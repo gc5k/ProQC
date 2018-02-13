@@ -1,0 +1,10 @@
+Package: proQC
+Type: Package
+Title: Quality control for proteomics
+Version: 0.1.0
+Author: Guo-Bo Chen
+Maintainer: Guo-Bo Chen <chenguobo@gmail.com>
+Description: Quality control for proteomics
+License: GNU 3.o0v
+Encoding: UTF-8
+LazyData: true
