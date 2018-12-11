@@ -1,11 +1,32 @@
 #############function pca
+library(Rcpp)
+sourceCpp("./R/cormatrix.cpp")
+
+##########proCorMatrix by Rcpp
+proCorMatrix_c <- function(pMat)
+{
+  pMatS=matrix(0, nrow(pMat), ncol(pMat))
+
+  for(i in 1:ncol(pMat))
+  {
+    pMatS[,i] = scale(pMat[,i])
+  }
+
+  pmats0=pMatS
+  pmats0[which(is.na(pmats0))]=0
+
+  exCor=CorMatrix(pmats0)
+  return(exCor)
+}
+
+#############function pca
 pEvecCat <- function(pEg, Cat, PC=c(1,2))
 {
   TN=names(table(Cat))
   layout(matrix(1:length(TN), floor(sqrt(length(TN))), ceiling(sqrt(length(TN)))))
   for(i in 1:length(TN))
   {
-    idx=which(cat == TN[i])
+    idx=which(Cat == TN[i])
     plot(pch=16, cex=0.7, main=TN[i], bty="l", xlab=paste0("Eigenvector ", PC[1]), ylab=paste0("Eigenvector ", PC[2]), pEg$vectors[idx,PC[1]], pEg$vectors[idx,PC[2]], xlim=range(pEg$vectors[,PC[1]])*1.1, ylim=range(pEg$vectors[,PC[2]])*1.1)
     abline(v=0, h=0, col="grey", lty=2)
     points(mean(pEg$vectors[idx,PC[1]]), mean(pEg$vectors[idx,PC[2]]), cex=1.5, lwd=2, col="green")
@@ -42,7 +63,7 @@ pEvecPlot <- function(pEg, PC=c(1,2), COL="grey", ma=0.3)
   {
     for(j in (i+1):pc)
     {
-      plot(pEg$vectors[,PC[i]+2], pEg$vectors[, PC[j]+2], cex=0.5, pch=16, col=COL, xlim=1.2*range(pEg$vectors[,PC[i]+2]), ylim=1.2*range(pEg$vectors[,PC[j]+2]), bty="l", axes = F)
+      plot(pEg$vectors[,PC[i]], pEg$vectors[, PC[j]], cex=0.5, pch=16, col=COL, xlim=1.2*range(pEg$vectors[,PC[i]]), ylim=1.2*range(pEg$vectors[,PC[j]]), bty="l", axes = F)
       abline(h=0, v=0, col="grey70", lty=2)
     }
   }
@@ -50,14 +71,14 @@ pEvecPlot <- function(pEg, PC=c(1,2), COL="grey", ma=0.3)
   {
     if (i== 1)
     {
-      plot(x=NULL, y=NULL, xlim=1.2*range(pEg$vectors[,PC[i]+2]), ylim=1.2*range(pEg$vectors[,PC[i]+2]), bty="l")
+      plot(x=NULL, y=NULL, xlim=1.2*range(pEg$vectors[,PC[i]]), ylim=1.2*range(pEg$vectors[,PC[i]]), bty="l")
     } else if (i == pc)
     {
-      plot(x=NULL, y=NULL, xlim=1.2*range(pEg$vectors[,PC[i]+2]), ylim=1.2*range(pEg$vectors[,PC[i]+2]), bty="l")
+      plot(x=NULL, y=NULL, xlim=1.2*range(pEg$vectors[,PC[i]]), ylim=1.2*range(pEg$vectors[,PC[i]]), bty="l")
     } else {
-      plot(x=NULL, y=NULL, xlim=1.2*range(pEg$vectors[,PC[i]+2]), ylim=1.2*range(pEg$vectors[,PC[i]+2]), bty="l")
+      plot(x=NULL, y=NULL, xlim=1.2*range(pEg$vectors[,PC[i]]), ylim=1.2*range(pEg$vectors[,PC[i]]), bty="l")
     }
-    text(mean(1.1*range(pEg$vectors[,PC[i]+2])), mean(1.1*range(pEg$vectors[,PC[i]+2])), labels = paste("EV", PC[i]))
+    text(mean(1.1*range(pEg$vectors[,PC[i]])), mean(1.1*range(pEg$vectors[,PC[i]])), labels = paste("EV", PC[i]))
   }
 }
 
@@ -97,22 +118,23 @@ pCorMatHist <- function(pCorMat)
 ##ProteinMissing
 proMissing <- function(pMat)
 {
-  proMiss=array(0, nrow(exDat))
-  for(i in 1:nrow(exDat))
+  indMiss=array(0, ncol(pMat))
+  for(i in 1:ncol(pMat))
   {
-    proMiss[i]=length(which(is.na(exDat[i,])))
+    indMiss[i]=length(which(is.na(pMat[,i])))
   }
-  return(proMiss)
+  return(indMiss)
 }
 
 indMissing <- function(pMat)
 {
-  indMiss=array(0, ncol(exDat))
-  for(i in 1:ncol(exDat))
+  proMiss=array(0, nrow(pMat))
+  for(i in 1:nrow(pMat))
   {
-    indMiss[i]=length(which(is.na(exDat[,i])))
+    proMiss[i]=length(which(is.na(pMat[i,])))
   }
-  return(indMiss)
+  return(proMiss)
+
 }
 
 ##

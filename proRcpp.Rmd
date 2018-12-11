@@ -1,0 +1,38 @@
+---
+title: "Rcpp"
+author: "gc5k"
+date: "7/15/2018"
+output:
+ html_document:
+    theme: united
+    highlight: tango
+    code_folding: hide
+---
+
+```{r, read}
+####pca analysis
+exDat=read.table("./demo/QN_PPP1.txt", as.is = T, header = T)
+PPP1=read.table("./demo/ID_PPP1.txt", as.is = T, header = T)
+```
+
+```{r, Rcpp}
+source("./R/qcFun.R")
+print(paste("Rcpp start: ", date()))
+pCorMc=proCorMatrix_c(exDat)
+print(paste("Rcpp end: ", date()))
+pCorMatHist(pCorMc)
+
+print(paste("R start: ", date()))
+pCorM=proCorMatrix(exDat)
+print(paste("R end: ", date()))
+
+layout(matrix(1:2, 1, 2))
+plot(pCorMc[col(pCorMc)<row(pCorMc)], pCorM[col(pCorM)<row(pCorM)], main="Rcpp vs R", bty='l')
+eg=eigen(pCorMc)
+plot(eg$vectors[,1], eg$vectors[,2], xlab="PC 1", ylab="PC 2", bty='l', main = "PCA", pch=16, cex=0.5)
+idx=which(PPP1$Tissue=="A")
+points(eg$vectors[idx,1], eg$vectors[idx,2], cex=2, pch=16, col="pink")
+#misPro=proMissing(exDat) #missing per protein (column)
+#misInd=indMissing(exDat) #missing per individual (row)
+```
+

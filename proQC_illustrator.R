@@ -1,6 +1,8 @@
 ####pca analysis
 exDat=read.table("./demo/QN_PPP1.txt", as.is = T, header = T)
 PPP1=read.table("./demo/ID_PPP1.txt", as.is = T, header = T)
+
+pCorMc=proCorMatrix_c(exDat)
 pCorM=proCorMatrix(exDat)
 pCorMatHist(pCorM)
 
@@ -17,7 +19,7 @@ pcaCatPlot(pEg, 5, PPP1$Tissue)
 pcaCatPlot(pEg, 5, PPP1$MS_ID)
 
 pVCA(pEg, 10, PPP1$Tissue)
-
+pVCA(pEg, 10, PPP1$MS_ID)
 pEvecPlot(pEg$vectors, c(1,2,3,4), COL=as.numeric(as.factor(PPP1$Tissue)))
 pEvecCat(pEg$vectors, PPP1$Tissue, c(1,2)) #tissue
 pEvecCat(pEg$vectors, PPP1$MS_ID, c(1,2)) #tissue
