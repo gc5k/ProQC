@@ -2,8 +2,9 @@
 exDat=read.table("./demo/QN_PPP1.txt", as.is = T, header = T)
 PPP1=read.table("./demo/ID_PPP1.txt", as.is = T, header = T)
 
-pCorMc=proCorMatrix_c(exDat)
-pCorM=proCorMatrix(exDat)
+source("R/qcFun.R")
+pCorM=proCorMatrix_c(exDat)
+#pCorM=proCorMatrix(exDat)
 pCorMatHist(pCorM)
 
 misPro=proMissing(exDat) #missing per protein (column)

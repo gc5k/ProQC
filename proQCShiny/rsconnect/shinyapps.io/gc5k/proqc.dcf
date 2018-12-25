@@ -1,0 +1,12 @@
+name: proqc
+title: proQC
+username:
+account: gc5k
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 622791
+bundleId: 1781848
+url: https://gc5k.shinyapps.io/proqc/
+when: 1545665590.3655
+asMultiple: FALSE
+asStatic: FALSE
