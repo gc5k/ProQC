@@ -7,6 +7,9 @@
 #    http://shiny.rstudio.com/
 #
 
+#options(repos = BiocInstaller::biocinstallRepos())
+#getOption("repos")
+
 library(shiny)
 library(preprocessCore)
 options(shiny.maxRequestSize=200*1024^2, shiny.launch.browser=T)
