@@ -19,17 +19,17 @@ source("qcFun.R")
 ui <- fluidPage(
 
    # Application title
-   titlePanel("SWATH proQC [Santa Claus]"),
+   titlePanel("SWATH proQC [Santa]"),
 
    # Sidebar with a slider input for number of bins
    fluidRow(
      column(3,
         fileInput("proFile",
-                  "Protein matrix")
+                  "Protein matrix file", accept = c(".csv", ".txt"))
      ),
      column(3,
         fileInput("indFile",
-                  "Individal info")
+                  "Sample information file", accept = c(".csv", ".txt"))
      )
    ),
    hr(),
@@ -41,7 +41,7 @@ ui <- fluidPage(
      ),
      column(3,
        selectInput("qcMethod", "Quality control",
-                    choices=c("as.is", "QN", "Combat", "LM"))
+                    choices=c("as.is", "QN"))
      )
    ),
    fluidRow(
@@ -64,7 +64,7 @@ ui <- fluidPage(
             sidebarPanel(
               sliderInput("x", "xLab", 1, 8, 1, step = 1),
               sliderInput("y", "yLab", 1, 8, 2, step = 1),
-              selectInput("label", "Label",
+              selectInput("label", "Group",
                           choices=c("Tissue", "Year", "MS_ID")
               )
             ),
@@ -79,7 +79,7 @@ ui <- fluidPage(
 
 MakeProMat <- function(pFile, sFile, mCut) {
 
-  print(paste("Making Protein matrix", Sys.time()[1]))
+  print(paste0("Reading protein matrix [", Sys.time()[1], "]"))
   prot=read.table(pFile, as.is = T, header = T)
   #remove missing
 
@@ -93,11 +93,11 @@ MakeProMat <- function(pFile, sFile, mCut) {
   dat=dat[-idxMS,]
   prot=prot[,-(idxMS+1)]
 
+  print(paste0("Reading sample information [", Sys.time()[1], "]"))
   PPP0=read.csv(sFile, as.is = T, header = T)
   PPP1=PPP0
   PPP1$PPPA_ID=tolower(PPP1$PPPA_ID)
   PPP1=PPP1[-idxMS,]
-  print(colnames(prot)[1:3])
   return (list(datP=dat, proM=prot, pheM=PPP1))
 }
 
@@ -159,10 +159,11 @@ server <- function(input, output) {
 
   observeEvent(input$proRun, {
     output$summary <- renderPrint({
-      print(paste("Protein matrix file:", input$proFile$name))
-      print(paste("Protein matrix file:", input$indFile$name))
-      print(paste("Removed individuals missing rate >", as.numeric(input$mRate)))
-      print(paste("QC is", input$qcMethod))
+      dat=currentProMat();
+
+      print(paste("Missing rate threshold:", as.numeric(input$mRate)))
+      print(paste0("QC is '", input$qcMethod, "'"))
+      print(paste(nrow(dat$datP), "individuals and", ncol(dat$datP), "proteins are remained for analysis."))
     })
 
     output$generic <- renderPlot({
@@ -233,4 +234,3 @@ server <- function(input, output) {
 
 # Run the application
 shinyApp(ui = ui, server = server)
-
