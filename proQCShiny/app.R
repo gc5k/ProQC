@@ -7,14 +7,15 @@
 #    http://shiny.rstudio.com/
 #
 
-#options(repos = BiocInstaller::biocinstallRepos())
-#getOption("repos")
+options(repos = BiocInstaller::biocinstallRepos())
+getOption("repos")
 
 library(shiny)
 library(preprocessCore)
 options(shiny.maxRequestSize=200*1024^2, shiny.launch.browser=T)
 source("qcFun.R")
-
+pcXlim=8
+pcYlim=8
 # Define UI for application that draws a histogram
 ui <- fluidPage(
 
@@ -57,19 +58,20 @@ ui <- fluidPage(
           tabPanel("Summary",
             verbatimTextOutput("summary")
           ),
-          tabPanel("Generic",
-            plotOutput("generic", height = "200px")
+          tabPanel("PCA",
+            plotOutput("generic")
           ),
           tabPanel("eSpace",
             sidebarPanel(
-              sliderInput("x", "xLab", 1, 8, 1, step = 1),
-              sliderInput("y", "yLab", 1, 8, 2, step = 1),
+              sliderInput("x", "xLab", 1, pcXlim, value=c(1,1), step = 1, dragRange = T),
+              sliderInput("y", "yLab", 1, pcYlim, value=c(2,2), step = 1, dragRange = T),
               selectInput("label", "Group",
                           choices=c("Tissue", "Year", "MS_ID")
               )
             ),
             mainPanel(
-              plotOutput("distPlot")
+              plotOutput("distPlot"),
+              plotOutput("distPlot2")
             )
           )
         )
@@ -208,27 +210,68 @@ server <- function(input, output) {
         }
 
         idxLab=which(tolower(colnames(PPP1)) == tolower(input$label))
-        print(idxLab)
       #######Eigenvalue plot
         incProgress(1/n, detail = paste0(" Visualization ..."))
 
       ######################pcA for tissue
-        layout(matrix(1:length(names(table(PPP1[,idxLab]))),
+        layout(matrix(1:(2*ceiling(length(names(table(PPP1[,idxLab])))/2)),
                       2, ceiling(length(names(table(PPP1[,idxLab])))/2), byrow = F))
+        xL=input$x[1]
+        yL=input$y[1]
         for(i in 1:length(names(table(PPP1[,idxLab])))) {
           spIdx=which(PPP1[,idxLab] == names(table(PPP1[,idxLab]))[i])
-          plot(eve[spIdx,input$x], eve[spIdx,input$y],
-               xlab=paste0("PC ", input$x), ylab=paste0("PC ", input$y), bty='n', axes = T,
-               xlim=range(eve[,input$x], na.rm = TRUE)*1.1,
-               ylim=1.1*range(eve[,input$x], na.rm = TRUE),
+          plot(eve[spIdx,xL], eve[spIdx,yL],
+               xlab=paste0("PC ", xL), ylab=paste0("PC ", yL), bty='n', axes = T,
+               xlim=range(eve[, xL], na.rm = TRUE)*1.1,
+               ylim=1.1*range(eve[,yL], na.rm = TRUE),
                col=i, pch=16, cex=0.5)
-          points(mean(eve[spIdx,input$x]), mean(eve[spIdx,input$y]),
+          points(mean(eve[spIdx, xL]), mean(eve[spIdx, yL]),
                  pch=1, cex=1, lwd=3, col="grey")
           legend("bottomleft", legend = names(table(PPP1[,idxLab]))[i], bty = 'n')
+          abline(h=0, v=0, lty=2, col=c("violet", "cyan"))
         }
       })
     })
 
+    output$distPlot2 <- renderPlot(height = 200, {
+      ##read data
+      withProgress(message="SWATH proQC:", value=0, {
+        n = 3
+        incProgress(1/n, detail = paste0(" Reading ..."))
+        incProgress(1/n, detail = paste0(" PCA ..."))
+
+        pc=currentPC()
+        grm=pc$pCorM
+        eve=pc$pEg$vectors
+        eva=pc$pEg$values
+        PPP1=currentProMat()$pheM
+
+        if (input$label == "") {
+          Lab="Tissue"
+        } else {
+          Lab=input$label
+        }
+
+        idxLab=which(tolower(colnames(PPP1)) == tolower(input$label))
+        #######Eigenvalue plot
+        incProgress(1/n, detail = paste0(" Visualization ..."))
+
+        ######################pcA for tissue
+        layout(matrix(1:2, 1, 2))
+        xL=input$x[1]
+        yL=input$y[1]
+        varMat=matrix(0, pcXlim, 2)
+        varMat[,1] = eva[1:pcXlim]/sum(eva)
+        for(i in 1:pcXlim) {
+          an=aov(eve[, i]~as.factor(PPP1[,idxLab]))
+          varMat[i,2]=summary(an)[[1]][1,2]/sum(summary(an)[[1]][,2])
+        }
+        barCol=rep("grey", pcXlim)
+        barCol[c(xL, yL)] = c("cyan", "violet")
+        barplot(ylab="Raw var", varMat[,1], border = F, beside=T, col=barCol, xlab="eSpace")
+        barplot(ylab="Weighted var", varMat[,2], border = F, beside=T, col=barCol, xlab="eSpace")
+      })
+    })
   })
 }
 
