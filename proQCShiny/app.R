@@ -10,6 +10,12 @@
 options(repos = BiocInstaller::biocinstallRepos())
 getOption("repos")
 
+if(length(grep("apple",sessionInfo()$platform, ignore.case = TRUE))>0) {
+  system("git rev-list head --max-count 1 > gitTag.txt")
+}
+
+gTag=read.table("gitTag.txt")
+
 library(shiny)
 library(preprocessCore)
 options(shiny.maxRequestSize=200*1024^2, shiny.launch.browser=T)
@@ -21,6 +27,8 @@ ui <- fluidPage(
 
    # Application title
    titlePanel("SWATH proQC [Santa]"),
+   h6(paste("Git version:", gTag[1,1])),
+   hr(),
 
    # Sidebar with a slider input for number of bins
    fluidRow(
@@ -82,25 +90,51 @@ ui <- fluidPage(
 MakeProMat <- function(pFile, sFile, mCut) {
 
   print(paste0("Reading protein matrix [", Sys.time()[1], "]"))
-  prot=read.table(pFile, as.is = T, header = T)
-  #remove missing
-
-  dat=t(prot[,c(2:ncol(prot))])
-  ms=array(0, dim=nrow(dat))
-  for(i in 1:length(ms)) {
-    ms[i]=length(which(is.na(dat[i,])))
+  if (substr(pFile, nchar(pFile)-2, nchar(pFile)) == "csv") {
+    prot=read.csv(pFile, as.is = T, header = T)
+  } else {
+    prot=read.table(pFile, as.is = T, header = T)
   }
-  idxMS=which(ms>(mCut*ncol(dat)))
+  print(paste0(ncol(prot)-1, " samples and ", nrow(prot), " proteins."))
 
-  dat=dat[-idxMS,]
-  prot=prot[,-(idxMS+1)]
+  #remove missing
+  ms=array(0, dim=ncol(prot)-1)
+  for(i in 1:length(ms)) {
+    ms[i]=length(which(is.na(prot[,i+1])))
+  }
+  idxMS=which(ms> (mCut*nrow(prot)))
+
+  if (length(idxMS)> 0) {
+    prot=prot[,-(idxMS+1)]
+  } else {
+    prot=prot[,-1]
+  }
+  print(paste0("Removed ", length(idxMS), " samples [missing rate > ", mCut, "]"))
+
+  colnames(prot)=tolower(colnames(prot))
 
   print(paste0("Reading sample information [", Sys.time()[1], "]"))
-  PPP0=read.csv(sFile, as.is = T, header = T)
-  PPP1=PPP0
-  PPP1$PPPA_ID=tolower(PPP1$PPPA_ID)
-  PPP1=PPP1[-idxMS,]
-  return (list(datP=dat, proM=prot, pheM=PPP1))
+  if (substr(sFile, nchar(sFile)-2, nchar(sFile)) == "csv") {
+    phe0=read.csv(sFile, as.is = T, header = T)
+  } else {
+    phe0=read.table(sFile, as.is = T, header = T)
+  }
+  phe1=phe0
+  phe1$PPPA_ID=tolower(phe1$PPPA_ID)
+
+  comP=intersect(colnames(prot), phe1$PPPA_ID)
+
+  if (length(comP) > 0) {
+    prot=prot[ ,colnames(prot) %in% comP]
+    phe1=phe1[phe1$PPPA_ID %in% comP, ]
+  } else {
+    showNotification("No samples in common.")
+  }
+
+  prot=subset(prot[, order(comP)])
+  phe1=subset(phe1[order(comP), ])
+
+  return (list(datP=t(prot), proM=prot, pheM=phe1))
 }
 
 proQC <- function(qcM, datM) {
@@ -163,9 +197,8 @@ server <- function(input, output) {
     output$summary <- renderPrint({
       dat=currentProMat();
 
-      print(paste("Missing rate threshold:", as.numeric(input$mRate)))
       print(paste0("QC is '", input$qcMethod, "'"))
-      print(paste(nrow(dat$datP), "individuals and", ncol(dat$datP), "proteins are remained for analysis."))
+      print(paste(nrow(dat$datP), "samples and", ncol(dat$datP), "proteins are remained for analysis."))
     })
 
     output$generic <- renderPlot({
