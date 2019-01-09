@@ -27,7 +27,8 @@ ui <- fluidPage(
 
    # Application title
    titlePanel("SWATH proQC [Santa]"),
-   h6(paste("Git version:", gTag[1,1])),
+   h6(paste("Git commit:", gTag[1,1])),
+   h6(paste("Contact: chenguobo@gmail.com")),
    hr(),
 
    # Sidebar with a slider input for number of bins
@@ -120,13 +121,13 @@ MakeProMat <- function(pFile, sFile, mCut) {
     phe0=read.table(sFile, as.is = T, header = T)
   }
   phe1=phe0
-  phe1$PPPA_ID=tolower(phe1$PPPA_ID)
+  phe1$ID=tolower(phe1$ID)
 
-  comP=intersect(colnames(prot), phe1$PPPA_ID)
+  comP=intersect(colnames(prot), phe1$ID)
 
   if (length(comP) > 0) {
     prot=prot[ ,colnames(prot) %in% comP]
-    phe1=phe1[phe1$PPPA_ID %in% comP, ]
+    phe1=phe1[phe1$ID %in% comP, ]
   } else {
     showNotification("No samples in common.")
   }
@@ -156,11 +157,11 @@ proQC <- function(qcM, datM) {
   exDat=matrix(0, nrow(qdat), ncol(qdat))
   rID=matrix(0, nrow(qdat), 1)
   for (i in 1:nrow(PPP1)) {
-    idx=which(rownames(qdat) == PPP1$PPPA_ID[i])
+    idx=which(rownames(qdat) == PPP1$ID[i])
     rID[i,1]=idx
     exDat[i,] = qdat[idx,]
   }
-  rownames(exDat) = PPP1$PPPA_ID[rID[,1]]
+  rownames(exDat) = PPP1$ID[rID[,1]]
   colnames(exDat)=colnames(qdat)
   return(exDat)
 }
