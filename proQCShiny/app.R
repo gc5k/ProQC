@@ -16,6 +16,7 @@ if(length(grep("apple",sessionInfo()$platform, ignore.case = TRUE))>0) {
 
 gTag=read.table("gitTag.txt")
 
+library(tsne)
 library(shiny)
 library(preprocessCore)
 options(shiny.maxRequestSize=200*1024^2, shiny.launch.browser=T)
@@ -82,6 +83,18 @@ ui <- fluidPage(
               plotOutput("distPlot"),
               plotOutput("distPlot2")
             )
+          ),
+          tabPanel("tSNE",
+            sidebarPanel(
+              selectInput("tSNElabel", "Group",
+                          choices=c("Tissue", "Year", "MS_ID")
+              ),
+              actionButton("runtSNE",
+                "tSNE, Go!", icon = icon("refresh"))
+              ),
+            mainPanel(
+              plotOutput("tSNEplot")
+            )
           )
         )
       )
@@ -129,7 +142,7 @@ MakeProMat <- function(pFile, sFile, mCut) {
     prot=prot[ ,colnames(prot) %in% comP]
     phe1=phe1[phe1$ID %in% comP, ]
   } else {
-    showNotification("No samples in common.")
+    showNotification("No samples in common.", type = c("error"))
   }
 
   prot=subset(prot[, order(comP)])
@@ -139,35 +152,20 @@ MakeProMat <- function(pFile, sFile, mCut) {
 }
 
 proQC <- function(qcM, datM) {
-  print(paste("Concudting QC", Sys.time()[1]))
-  prot=datM$proM
-  PPP1=datM$pheM
+  print(paste("Conducting QC", Sys.time()[1]))
 
+  print(paste0("QC::", qcM))
   if(qcM == "QN") {
-    print("QC::QN")
     qdat=t(normalize.quantiles(t(datM$datP)))
   } else {
-    print("Other QC")
     qdat=datM$datP
   }
-  colnames(qdat)=prot$protein_group
-  rownames(qdat)=rownames(t(prot[,c(2:ncol(prot))]))
 
-  #line up data
-  exDat=matrix(0, nrow(qdat), ncol(qdat))
-  rID=matrix(0, nrow(qdat), 1)
-  for (i in 1:nrow(PPP1)) {
-    idx=which(rownames(qdat) == PPP1$ID[i])
-    rID[i,1]=idx
-    exDat[i,] = qdat[idx,]
-  }
-  rownames(exDat) = PPP1$ID[rID[,1]]
-  colnames(exDat)=colnames(qdat)
-  return(exDat)
+  return(qdat)
 }
 
 proPCA <- function(exDat) {
-  print(paste("Concudting PCA", Sys.time()[1]))
+  print(paste("Conducting PCA", Sys.time()[1]))
   p_CorM=proCorMatrix_c(exDat)
   p_Eg=eigen(p_CorM)
   return(list(pCorM=p_CorM, pEg=p_Eg))
@@ -181,7 +179,7 @@ server <- function(input, output) {
   })
 
   currentQC <- reactive({
-    datM=currentProMat()
+    datM = currentProMat()
     if (input$qcMethod == "as.is") {
       return(datM$datP)
     } else {
@@ -190,8 +188,51 @@ server <- function(input, output) {
   })
 
   currentPC <- reactive({
-    exDat=currentQC()
+    exDat = currentQC()
     proPCA(exDat)
+  })
+
+  currentDistMat <- reactive({
+    datP = currentQC()
+    distP = dist(datP, diag=TRUE)
+    return (distP)
+  })
+
+  currentTsneMat <- reactive({
+    distP = currentDistMat()
+    tss = tsne(distP, perplexity = 50)
+    return (tss)
+  })
+
+  observeEvent(input$runtSNE, {
+    output$tSNEplot <- renderPlot({
+      withProgress(message="SWATH tSNE:", value=0, {
+        n=4
+        incProgress(1/n, detail = paste0(" Updating protein matrix ..."))
+#        datM=currentProMat()
+
+        incProgress(1/n, detail = paste0(" Calculating Euclidean distance ..."))
+#        distP=dist(datM$datP, diag=TRUE)
+
+        incProgress(1/n, detail = paste0(" Conducting tSNE. Very slow ..."))
+#        tss=tsne(distP, perplexity = 50)
+
+        datM=currentProMat()
+        idxLab=which(tolower(colnames(datM$pheM)) == tolower(input$tSNElabel))
+        if (length(idxLab) == 0) {
+          showNotification(paste0("No tag '", input$tSNElabel, "' was found"), type = c("error"))
+          return
+        }
+
+        tColors=rainbow(length(unique(datM$pheM[,idxLab])))
+        names(tColors) = unique(datM$pheM[,idxLab])
+        tss=currentTsneMat()
+        layout(matrix(c(1,1,2), 1, 3))
+        plot(tss[,1], tss[,2], xlab="tSNE 1", ylab="tSNE 2", col=tColors[datM$pheM[,idxLab]], bty='n', pch=16, cex=0.5)
+        plot(x=NULL, y=NULL, xlim=c(0, 1), ylim=c(0, 1), axes = F, xlab="", ylab="")
+        legend("topleft", legend = unique(datM$pheM[,idxLab]), col=tColors[datM$pheM[,idxLab]], pch=16, cex=0.5, bty ='n')
+      })
+    })
   })
 
   observeEvent(input$proRun, {
@@ -244,14 +285,23 @@ server <- function(input, output) {
         }
 
         idxLab=which(tolower(colnames(PPP1)) == tolower(input$label))
+        if (length(idxLab) == 0) {
+          showNotification(paste0("No tag ", input$label), type = c("error"))
+          return
+        }
       #######Eigenvalue plot
         incProgress(1/n, detail = paste0(" Visualization ..."))
 
+        if (length(names(table(PPP1[,idxLab])))>12) {
+          showNotification(paste0("Too many levels: ", length(names(table(PPP1[,idxLab])))), "levels.", type = c("error"))
+          return
+        }
       ######################pcA for tissue
         layout(matrix(1:(2*ceiling(length(names(table(PPP1[,idxLab])))/2)),
                       2, ceiling(length(names(table(PPP1[,idxLab])))/2), byrow = F))
         xL=input$x[1]
         yL=input$y[1]
+        colors=rainbow(length(unique(PPP1[,idxLab])))
         for(i in 1:length(names(table(PPP1[,idxLab])))) {
           spIdx=which(PPP1[,idxLab] == names(table(PPP1[,idxLab]))[i])
           plot(eve[spIdx,xL], eve[spIdx,yL],
@@ -279,12 +329,6 @@ server <- function(input, output) {
         eve=pc$pEg$vectors
         eva=pc$pEg$values
         PPP1=currentProMat()$pheM
-
-        if (input$label == "") {
-          Lab="Tissue"
-        } else {
-          Lab=input$label
-        }
 
         idxLab=which(tolower(colnames(PPP1)) == tolower(input$label))
         #######Eigenvalue plot
