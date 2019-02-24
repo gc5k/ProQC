@@ -9,7 +9,7 @@
 
 options(repos = BiocInstaller::biocinstallRepos())
 getOption("repos")
-
+#library(BiocManager)
 if(length(grep("apple",sessionInfo()$platform, ignore.case = TRUE))>0) {
   system("git rev-list head --max-count 1 > gitTag.txt")
 }

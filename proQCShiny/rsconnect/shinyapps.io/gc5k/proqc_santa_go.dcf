@@ -5,8 +5,8 @@ account: gc5k
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 622798
-bundleId: 1804926
+bundleId: 1806400
 url: https://gc5k.shinyapps.io/proqc_santa_go/
-when: 1547046411.83439
+when: 1547113748.77171
 asMultiple: FALSE
 asStatic: FALSE
