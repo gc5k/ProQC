@@ -2,7 +2,7 @@ rep=1000
 pvec=array(0, dim=c(3,rep))
 ncs=100
 ncl=125
-m=2000
+m=1
 mu1=13
 mu2=13.5
 sigma=0.75
@@ -25,3 +25,5 @@ length(which(pvec[3,] > qchisq(0.025/m, 1, lower.tail = F)))
 NCP=(mu1-mu2)^2/sigma^2*ncs*ncl/(ncs+ncl)
 qqplot(pvec[3,], rchisq(rep, 1, ncp=NCP), pch=16)
 abline(a=0, b=1)
+
+
