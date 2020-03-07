@@ -1,0 +1,993 @@
+---
+title: "proQC"
+author: "gc5k [chen.guobo@foxmail.com]"
+date: "1/17/2020"
+output: 
+  html_document:
+    theme: united
+    highlight: tango
+    code_folding: hide
+---
+
+```{r, date, echo=FALSE, warning=FALSE}
+Date=Sys.Date()[1]
+print(paste0("Document is generated at ", Date, "."))
+source("./R/qcFun.R")
+
+```
+
+# Table of contents {.tabset .tabset-fade .tabset-pills}
+
+## Read PPP1 peptide matrix
+```{r, PPP1-data}
+getwd()
+md=read.csv("guot_170728_PC1_CPP585_sw_allFrag_with_dscore_filtered.csv", as.is = T, header = T, sep = "\t")
+proFile="pppb_pep2.txt"
+prot=read.table(proFile, as.is = T, header = T)
+#rownames(prot)=prot[,1]
+#prot=prot[,-c(1,2)]
+PPP0=read.csv("PPPB1_lineup.csv", as.is = T, header = T)
+PPP1=PPP0
+PPP1$PPPA_ID=tolower(PPP1$PPPA_ID)
+
+dim(PPP1)
+dim(prot)
+
+```
+
+## Remove missing
+```{r, PPP1-missing}
+#evaluate missing value
+protT=t(prot)
+
+misD=matrix(1, nrow(protT), 4)
+for(i in 1:nrow(misD)) {
+  naIdx=which(is.na(protT[i,]))
+  if (length(naIdx) < ncol(protT)) {
+    misD[i, 1] = length(naIdx)/ncol(protT)
+    misD[i, 2] = min(protT[i,-naIdx])
+    misD[i, 3] = median(protT[i, -naIdx])
+    misD[i, 4] = mean(protT[i, -naIdx])
+  }
+}
+blankInd = which(misD[,1]> 0.8)
+
+prot=prot[,-blankInd]
+protT=protT[-blankInd,]
+PPP1=PPP1[-blankInd,]
+print(paste0("Removed: ", length(blankInd), " samples"))
+```
+
+## Density plot
+```{r, proDencity, echo=TRUE}
+######Slide 1: density plot
+print("Slide 1: A-AQUA, C-CTRL, N-Normal, T-Tumor")
+proDensityPlot(protT, PPP1$Tissue)
+
+```
+
+## Quality score
+
+Quality score is defined as $$Q=\frac{\sum_{i=1}^\tilde{M}\tilde{s}_i(k-\frac{n_o}{n})^c}{\sum_{i=1}^Ms_i}$$
+in which $\tilde{s}_i=[y_i-(E(y_i|n_{o_i})+T_{\alpha/M}\sigma_i)]^2$ if $y_i > E(y_i|n_{o_i})$ or $\tilde{s}_i=[y_i-(E(y_i|n_{o_i})-T_{\alpha/M}\sigma_i)]^2$ if $y_i < E(y_i|n_{o_i})$.
+In contrast, $s_i=[y_i-E(y_i|n_{o_i})]^2$.
+
+$T_{\alpha/M}$ is the z-score given the p-value cutoff $\alpha/M$, and $\alpha$ can be for example 0.01 or 0.05.
+
+$E(y_i|n_{o_i})$ can be predicted from the fitted spline.
+
+$\alpha$ determins the confidence interval of the spline. The smaller the $\alpha$, the larger the interval and the smaller $\tilde{M}$ till zero.
+
+$K$, between 0 and 1, indicates the direction of the penalty. When it is 1, the penalty is  more weighted on the proteins with fewer observations, and nearly no penalty at all for proteins without missing values.   
+
+$C$ is the penalty for the score.
+
+In summary, the quality score is upon $M$, $\alpha$, $K$, and $C$.
+```{r, Qscore, echo=FALSE}
+#####Slide 2: Missing plot
+print("Slide 2: Qscore")
+
+Qalpha=0.05
+TAG=c("A", "C", "N", "T")
+
+indMPro=list(protT[PPP1$Tissue==TAG[1],], 
+             protT[PPP1$Tissue==TAG[2],],
+             protT[PPP1$Tissue==TAG[3],],
+             protT[PPP1$Tissue==TAG[4],])
+
+layout(matrix(1:(length(TAG)+1), 1, (length(TAG)+1)))
+
+QStest=array(0, dim=c(6, length(TAG)))
+colnames(QStest)=TAG
+for(i in 1:length(TAG)) {
+  refAmean=colMeans(indMPro[[i]], na.rm = T)
+  refObsPro=array(1, dim=length(refAmean))
+  for(j in 1:length(refAmean)) {
+    if(length(which(!is.na(indMPro[[i]][,j])))>0) {
+      refObsPro[j] = length(which(!is.na(indMPro[[i]][,j])))
+    }
+  }
+
+  idNA=which(is.na(refAmean))
+  if(length(idNA)>0) {
+    ss=smooth.spline(1-refObsPro[-idNA]/nrow(indMPro[[i]]), refAmean[-idNA], df=5)
+    err=qnorm(1-Qalpha/length(refAmean[-idNA])/2)*sd(ss$x)
+  } else {
+    ss=smooth.spline(1-refObsPro/nrow(indMPro[[i]]), refAmean, df=5)
+    err=qnorm(1-Qalpha/length(refAmean)/2)*sd(ss$x)
+  }
+
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=0, C=0.5)
+  QStest[1,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=1, C=0.5)
+  QStest[2,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=0, C=1)
+  QStest[3,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=1, C=1)
+  QStest[4,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=0, C=2)
+  QStest[5,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=1, C=2)
+  QStest[6,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+}
+print(QStest)
+layout(matrix(1:2, 1, 2))
+barplot(main="K=0 (remove low missing rate)", QStest[c(1,3,5),], beside = T, border = NA, ylim=c(0, max(QStest)*1.2))
+barplot(main="K=1 (remove high missing rate)", QStest[c(2,4,6),], beside = T, border = NA, ylim=c(0, max(QStest)*1.2))
+legend("topright", legend = paste("C=", c(0.5, 1, 2)), pch=15, col=c("grey10", "grey50", "grey80"))
+
+
+layout(matrix(1:(length(TAG)+1), 1, (length(TAG)+1)))
+qdatAC=protT[PPP1$Tissue==TAG[1] | PPP1$Tissue==TAG[2],]
+
+refAmean=colMeans(qdatAC, na.rm = T)
+refObsPro=array(1, dim=length(refAmean))
+for(i in 1:length(refAmean)) {
+  if(length(which(!is.na(qdatAC[,i])))>0) {
+    refObsPro[i] = length(which(!is.na(qdatAC[,i])))
+  }
+}
+idNA=which(is.na(refAmean))
+
+plot(bty='n', main="A+C", xlab="Missing rate", ylab="Expression",
+     xlim=c(0, 1), ylim=c(0, 23),
+     1-refObsPro[-idNA]/nrow(qdatAC[-idNA,]),
+     refAmean[-idNA],
+     cex=0.5,pch=16, col="grey")
+
+ssAC=smooth.spline(1-refObsPro[-idNA]/nrow(qdatAC[-idNA,]), refAmean[-idNA], df=5)
+err=qnorm(1-Qalpha/length(refAmean)/2)*sd(ssAC$x)
+lines(ssAC, col="green", lty=1, lwd=3)
+lines(ssAC$x, ssAC$y+err, col="green", lty=3, lwd=2)
+lines(ssAC$x, ssAC$y-err, col="green", lty=3, lwd=2)
+
+Qscore=array(0, dim=length(TAG))
+for(i in 1:length(TAG)) {
+  refAmean=colMeans(indMPro[[i]], na.rm = T)
+  refObsPro=array(1, dim=length(refAmean))
+  for(j in 1:length(refAmean)) {
+    if(length(which(!is.na(indMPro[[i]][,j])))>0) {
+      refObsPro[j] = length(which(!is.na(indMPro[[i]][,j])))
+    }
+  }
+
+  idNA=which(is.na(refAmean))
+  ss=smooth.spline(1-refObsPro[-idNA]/nrow(indMPro[[i]]), refAmean[-idNA], df=5)
+  err=qnorm(1-Qalpha/length(refAmean)/2)*sd(ss$x)
+
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=1, C=2)
+  Qscore[i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+
+  plot(bty='n', main=paste(TAG[i], ": Qscore=", format(1-Qscore[i], digits = 3)), 
+       xlab="Missing rate", ylab="Expression", 
+       xlim=c(0, 1), ylim=c(0, 23), 
+       1-refObsPro/nrow(indMPro[[i]]), refAmean,cex=0.5,pch=16, col="grey")
+
+  if(i==1) {
+    ssA=smooth.spline(1-refObsPro[-idNA]/nrow(indMPro[[i]]), refAmean[-idNA], df=5)
+  }
+  lines(ssA, col="blue", lty=2, lwd=3)
+  lines(ss, col=ifelse(i!=1, "red", "blue"), lty=1, lwd=3)
+  lines(ss$x, ss$y+err, col=ifelse(i!=1, "red", "blue"), lty=3, lwd=1)
+  lines(ss$x, ss$y-err, col=ifelse(i!=1, "red", "blue"), lty=3, lwd=1)
+
+}
+```
+
+## Pair-wise comparison for expression
+```{r, expDiff, echo=FALSE}
+alpha=0.05
+beta=0.2
+
+qdatT=list(a=protT[PPP1$Tissue==TAG[1],],
+           c=protT[PPP1$Tissue==TAG[2],],
+           n=protT[PPP1$Tissue==TAG[3],], 
+           t=protT[PPP1$Tissue==TAG[4],])
+pT=matrix(NA, ncol(protT), 7)
+missT=matrix(NA, ncol(protT), 7)
+naCnt=matrix(NA, ncol(protT), 2)
+for(i in 1:nrow(pT)) {
+  naCnt[i,1]=naN=length(which(!is.na(qdatT$n[,i])))
+  naCnt[i,2]=naT=length(which(!is.na(qdatT$t[,i])))
+             
+  if(naN > 1 && naT > 1) {
+    tt=t.test(qdatT$t[,i], qdatT$n[,i])
+
+    pT[i,c(1,2)] = c(tt$statistic, tt$parameter)
+    pT[i,3]=-1*pt(abs(pT[i,1]), pT[i,2], lower.tail=FALSE, log.p=T)/log(10) - log10(2)
+    pT[i,c(4,5)]=tt$estimate
+    pT[i,6]=var(qdatT$n[,i], na.rm = T)
+    pT[i,7]=var(qdatT$t[,i], na.rm = T)
+
+    mTT=t.test(c(rep(1, naT), rep(0, nrow(qdatT$t))),
+               c(rep(1, naN), rep(0, nrow(qdatT$n)))) 
+    missT[i,c(1,2)] = c(mTT$statistic, mTT$parameter)
+    missT[i,3]=-1*pt(abs(missT[i,1]), missT[i,2], lower.tail=FALSE, log.p=T)/log(10) - log10(2)
+
+  }
+}
+
+#
+mat=matrix(0, 4, 4)
+mat[col(mat)<row(mat)]=seq(1,11,2)
+mat=t(mat)
+mat[col(mat)<row(mat)]=seq(2,12,2)
+diag(mat)=13
+mat=t(mat)
+
+layout(mat)
+par(mai=c(0.2,0.2,0.2,0.2))
+for(i in 1:3) {
+  for(j in (i+1):4) {
+    mT=colMeans(qdatT[[i]], na.rm = T)
+    mN=colMeans(qdatT[[j]], na.rm = T)
+    id=which(!is.na(mT)&!is.na(mN))
+    mTclean=mT[id]
+    mNclean=mN[id]
+    rkT=order(mTclean)
+    rkN=order(mNclean)
+    plot(main=paste(length(mNclean), TAG[i], "vs", TAG[j]), mNclean[rkT], col=j, cex=0.5, bty='n')
+    points(1:length(mTclean), mTclean[rkT], pch=16, cex=0.5, col=i)
+
+    plot(main=paste(length(mTclean), TAG[j], "vs", TAG[i]), mTclean[rkN], col=i, cex=0.5, bty='n')
+    points(1:length(mNclean), mNclean[rkN], pch=16, cex=0.5, col=j)
+  }
+}
+
+```
+
+## GC
+```{r, gc, echo=FALSE}
+## slide 3: gc
+print("Slide 3: GC control")
+
+print("Bartlett test")
+BTpval=array(1, ncol(protT))
+for(i in 1:length(BTpval)) {
+  ll=array(0, 4)
+  for(j in 1:length(TAG)) {
+    ll[j]=length(which(!is.na(protT[PPP1$Tissue==TAG[j],i])))
+  }
+  if(all(ll >= 2)) {
+    BTpval[i] = bartlett.test(protT[,i], PPP1$Tissue)$p.value
+  }
+}
+plot(-log10(BTpval), pch=16, cex=0.5, bty='l')
+
+pmat=matrix(NA, 6, ncol(indMPro[[1]]))
+pIdx=1
+layout(matrix(c(1,2,3,8,4,5,7,7,6), 3, 3))
+gc=array(0,6)
+
+for(i in 1:3) {
+  dn=indMPro[[i]]
+  for(j in (i+1):4) {
+    dm=indMPro[[j]]
+    for(k in 1:ncol(dn)) {
+      if( (length(which(!is.na(dn[,k]))) > 1) & (length(which(!is.na(dm[,k]))) >1)) {
+        ft= var.test(dn[,k], dm[,k], na.rm = T)
+        pmat[pIdx,k] = ft$p.value
+      }
+    }
+
+    hist(main=paste0(TAG[j], "/", TAG[i]), xlab="p-value (F test)", 
+         pmat[pIdx,which(!is.na(pmat[pIdx,]))], 
+         breaks = 20, col=pIdx)
+    abline(h=length(which(!is.na(pmat[pIdx,])))/20, lty=2, col="grey")
+    gc[pIdx]=qchisq(median(pmat[pIdx,], na.rm = T), df=1, lower.tail = F)/0.455
+    legend("topright", bty = 'n', legend = paste("GC=", format(gc[pIdx], digits = 3)))
+    pIdx=pIdx+1
+  }
+}
+
+pIdx=1
+for(i in 1:3) {
+  for(j in (i+1):4) {
+    if(pIdx==1) {
+      qqplot(bty='n', col=pIdx, ylim=c(0,70), xlab="Expected -log10(p)", ylab="Observed -log10(p)",
+             -log10(runif(length(which(pmat[pIdx,]<1)))),-log10(pmat[pIdx,]), pch=16, cex=0.5)
+      abline(a=0, b=1, col="grey", lty=2)
+    } else {
+      points(sort(-log10(runif(length(which(pmat[pIdx,]<1))))),sort(-log10(pmat[pIdx,])), col=pIdx, pch=16,cex=0.5)
+    }
+    pIdx=pIdx+1
+  }
+}
+legend("topleft", bty='n', legend = paste0("GC=", format(gc, digits=3)), pch=15, col=1:6)
+
+```
+
+## PCA
+```{r, pca, echo=FALSE, eval=TRUE}
+#generate correlation matrix
+print("Slide 4: PCA")
+
+pCorM=proCorMatrix_c(protT)
+
+#######
+pEg=eigen(pCorM)
+#barplot(pEg$values[1:20], border = F)
+eVec=apply(pEg$vectors[,c(1,2)], 2, scale)
+eM=list("e1"=matrix(0, 4, 3), "e2"=matrix(0,4,3))
+for(i in 1:2) {
+  for(j in 1:length(TAG)) {
+    eM[[i]][j,1]=mean(eVec[PPP1$Tissue==TAG[j], i])
+    eM[[i]][j,2]=var(eVec[PPP1$Tissue==TAG[j], i])
+    eM[[i]][j,3]=abs(eM[[i]][j,1])^2+eM[[i]][j,2]
+  }
+}
+print(eM[[1]])
+print(eM[[2]])
+#pEvecPlot(pEg, c(1,2,3,4), COL=as.numeric(as.factor(PPP1$Tissue)))
+pEvecCat(pEg, PPP1$Tissue, c(1,2)) #tissue
+#pEvecCat(pEg, PPP1$MS_ID, c(1,2)) #tissue
+
+#pcaCatPlot(pEg, 5, PPP1$Tissue)
+#pcaCatPlot(pEg, 5, PPP1$MS_ID)
+
+#pVCA(pEg, 10, PPP1$Tissue)
+#pVCA(pEg, 10, PPP1$MS_ID)
+
+```
+
+
+## m-score vs expression
+```{r, m-score}
+plot(-log10(md$m_score), log2(md$Intensity), xlab=expression(paste(-log[10], "(m-score)")), ylab=expression(paste(log[2], "(intensity)")), cex=0.5, pch=16, bty='l')
+```
+
+## Count vs Exp analysis PCT1
+```{r, overall-pct1}
+iNPC1=which(PPP1$Tissue == "N" & PPP1$MS_ID == "PC1")
+iTPC1=which(PPP1$Tissue == "T" & PPP1$MS_ID == "PC1")
+layout(matrix(1:2, 1, 2))
+
+#TrEst=matrix(-9, nrow(prot), 12)
+TrEst=matrix(-9, ncol(protT), 12)
+colnames(TrEst)=c("n_cs", "ObsM_cs", "ObsSD_cs", "EstM_cs", "EstSD_cs", "n_cl",  "ObsM_cl", "ObsSD_cl", "EstM_cl", "EstSD_cl", "t", "p-value")
+#for(i in 1:nrow(prot)) {
+for(i in 1:ncol(protT)) {
+
+  cl=protT[iNPC1, i]
+  clNa=which(is.na(cl))
+  clSetSt=sort(cl[!is.na(cl)])
+  TrEst[i,1]=length(clSetSt)
+  TrEst[i,2]=mean(clSetSt)
+  TrEst[i,3]=sd(clSetSt)
+
+  cs=protT[iTPC1, i]
+  csNa=which(is.na(cs))
+  csSetSt=sort(cs[!is.na(cs)])
+  TrEst[i,6]=length(csSetSt)
+  TrEst[i,7]=mean(csSetSt)
+  TrEst[i,8]=sd(csSetSt)
+
+  if(TrEst[i, 1] > 10 && TrEst[i,6] > 10) {
+    qclSet=qnorm(seq(1-(length(clNa)+0.5)/(length(cl)+1), 0.999, length.out = length(clSetSt)))
+    lm1=lm(as.numeric(clSetSt)~as.numeric(qclSet))
+    TrEst[i,4]=lm1$coefficients[1]
+    TrEst[i,5]=lm1$coefficients[2]
+# plot(main=paste0("cl [", length(clSetSt), "]"), clSetSt, qclSet, cex=0.5, pch=16)
+
+    qcsSet=qnorm(seq(1-(length(csNa)+0.5)/(length(cs)+1), 0.999, length.out = length(csSetSt)))
+    lm2=lm(csSetSt~qcsSet)
+    TrEst[i,9]=lm2$coefficients[1]
+    TrEst[i,10]=lm2$coefficients[2]
+# plot(main=paste0("cs [", length(csSetSt), "]"), csSetSt, qcsSet, cex=0.5, pch=16)
+    tTest=t.test(csSetSt, clSetSt)
+    TrEst[i,11]=tTest$statistic
+    TrEst[i,12]=tTest$p.value
+  }
+}
+
+TrEstOrg=TrEst
+idxN=which(TrEstOrg[,2] > 15)
+idxT=which(TrEstOrg[,7] > 15)
+write.table(rownames(prot)[idxN], "PCT1_Norm.txt", row.names=F, col.names=F, quote=F)
+write.table(rownames(prot)[idxT], "PCT1_Tumor.txt", row.names=F, col.names=F, quote=F)
+write.table(rownames(prot)[sort(union(idxN, idxT))], "PCT1_NT.txt", row.names=F, col.names=F, quote=F)
+
+layout(matrix(1:6, 2, 3))
+cutoff=c(10, 50, 100)
+for(i in 1:length(cutoff)) {
+  idx=which(TrEstOrg[,1] > cutoff[i] & TrEstOrg[,6] > cutoff[i])
+  lg=length(which(TrEstOrg[idx,12]< (0.05/nrow(TrEstOrg))))
+  plot(main=paste0(length(idx), " [Sig.", lg, "]"), xlab="Count [T-N]", ylab="Exp [T-N]", TrEstOrg[idx,6]-TrEstOrg[idx,1], TrEstOrg[idx,7]-TrEstOrg[idx,2], cex=0.1, pch=16, bty='l', 
+       col=ifelse(TrEstOrg[idx,12]< (0.05/nrow(TrEstOrg)), "red", "grey"))
+#  plot(TrEst[,1]-TrEst[,6], TrEst[,2]-TrEst[,7], cex=0.1, pch=16, col=ifelse(TrEst[,12] <0.05/nrow(TrEst), "red", "grey"))
+}
+
+lCL=glm(TrEst[,2]~TrEst[,1])
+lCS=glm(TrEst[,7]~TrEst[,6])
+
+layout(matrix(1:2, 1, 2))
+plot(main="Normal", TrEst[,1], TrEst[,2], bty="l", xlab="Count", ylab="Exp", pch=16, cex=0.3)
+abline(lCL, col="grey")
+lines(spline(TrEst[,1], TrEst[,2]), col="green")
+points(mean(TrEst[,1]), mean(TrEst[,2]), pch=16, cex=2, col="gold")
+
+plot(main="Tumor", TrEst[,6], TrEst[,7], bty="l", xlab="Count", ylab="Exp", pch=16, cex=0.3)
+abline(lCS, col="red")
+lines(spline(TrEst[,6], TrEst[,7]), col="green")
+points(mean(TrEst[,6]), mean(TrEst[,7]), pch=16, cex=2, col="gold")
+
+lCL
+lCS
+```
+
+## Count vs Exp analysis
+```{r, overall}
+iN=which(PPP1$Tissue == "N")
+iT=which(PPP1$Tissue == "T")
+layout(matrix(1:2, 1, 2))
+TrEst=matrix(-9, ncol(protT), 12)
+colnames(TrEst)=c("n_cs", "ObsM_cs", "ObsSD_cs", "EstM_cs", "EstSD_cs", "n_cl",  "ObsM_cl", "ObsSD_cl", "EstM_cl", "EstSD_cl", "t", "p-value")
+for(i in 1:ncol(protT)) {
+  cl=protT[iN, i]
+  clNa=which(is.na(cl))
+  clSetSt=sort(cl[!is.na(cl)])
+  TrEst[i,1]=length(clSetSt)
+  TrEst[i,2]=mean(clSetSt)
+  TrEst[i,3]=sd(clSetSt)
+  
+  cs=protT[iT, i]
+  csNa=which(is.na(cs))
+  csSetSt=sort(cs[!is.na(cs)])
+  TrEst[i,6]=length(csSetSt)
+  TrEst[i,7]=mean(csSetSt)
+  TrEst[i,8]=sd(csSetSt)
+
+  if(TrEst[i, 1] > 10 && TrEst[i,6] > 10) {
+    qclSet=qnorm(seq(1-(length(clNa)+0.5)/(length(cl)+1), 0.999, length.out = length(clSetSt)))
+    lm1=lm(clSetSt~qclSet)
+    TrEst[i,4]=lm1$coefficients[1]
+    TrEst[i,5]=lm1$coefficients[2]
+# plot(main=paste0("cl [", length(clSetSt), "]"), clSetSt, qclSet, cex=0.5, pch=16)
+  
+    qcsSet=qnorm(seq(1-(length(csNa)+0.5)/(length(cs)+1), 0.999, length.out = length(csSetSt)))
+    lm2=lm(csSetSt~qcsSet)
+    TrEst[i,9]=lm2$coefficients[1]
+    TrEst[i,10]=lm2$coefficients[2]
+# plot(main=paste0("cs [", length(csSetSt), "]"), csSetSt, qcsSet, cex=0.5, pch=16)
+    tTest=t.test(csSetSt, clSetSt)
+    TrEst[i,11]=tTest$statistic
+    TrEst[i,12]=tTest$p.value
+  }
+}
+
+
+TrEstOrg=TrEst
+
+layout(matrix(1:6, 2, 3))
+cutoff=c(10, 50, 100, 200, 300, 500)
+for(i in 1:length(cutoff)) {
+  idx=which(TrEstOrg[,1] > cutoff[i] & TrEstOrg[,6] > cutoff[i])
+  lg=length(which(TrEstOrg[idx,12]< (0.05/nrow(TrEstOrg))))
+  plot(main=paste0(length(idx), " [Sig.", lg, "]"), xlab="Count [T-N]", ylab="Exp [T-N]", TrEstOrg[idx,6]-TrEstOrg[idx,1], TrEstOrg[idx,7]-TrEstOrg[idx,2], cex=0.1, pch=16, bty='l', 
+       col=ifelse(TrEstOrg[idx,12]< (0.05/nrow(TrEstOrg)), "red", "grey"))
+#  plot(TrEst[,1]-TrEst[,6], TrEst[,2]-TrEst[,7], cex=0.1, pch=16, col=ifelse(TrEst[,12] <0.05/nrow(TrEst), "red", "grey"))
+}
+
+lCL=glm(TrEst[,2]~TrEst[,1])
+lCS=glm(TrEst[,7]~TrEst[,6])
+
+layout(matrix(1:2, 1, 2))
+plot(main="Normal", TrEst[,1], TrEst[,2], bty="l", xlab="Count", ylab="Exp", pch=16, cex=0.3)
+abline(lCL, col="grey")
+lines(spline(TrEst[,1], TrEst[,2]), col="green")
+points(mean(TrEst[,1]), mean(TrEst[,2]), pch=16, cex=2, col="gold")
+
+plot(main="Tumor", TrEst[,6], TrEst[,7], bty="l", xlab="Count", ylab="Exp", pch=16, cex=0.3)
+abline(lCS, col="red")
+lines(spline(TrEst[,6], TrEst[,7]), col="green")
+points(mean(TrEst[,6]), mean(TrEst[,7]), pch=16, cex=2, col="gold")
+
+lCL
+
+lCS
+
+```
+
+
+## G_2007.0659 example
+Each patient has a biological sample for tumor and a sample for normal control. Each tomor/normal sample has been analyzed independently on a machine. 
+The analysis for Patient **G_2007.0659**, who is taken as the representative of the layout of the experiment.
+
+```{r, G_2007.0659}
+UniSamp=table(PPP1$USZ_ID) #get sample ids, and G_2007.0659 is the first sample
+for(i in 1:1){
+  idx=which(PPP1$USZ_ID == names(UniSamp)[i])
+  CB=combn(length(idx), 2)
+  mat=matrix(0, ncol(CB), 3)
+  for(j in 1:ncol(CB)) {
+    ln=which(!is.na(prot[,idx[CB[1,j]]]) & !is.na(prot[,idx[CB[2,j]]]))
+    tg=paste0(PPP1[idx[CB[1,j]],]$Tissue, PPP1[idx[CB[2,j]],]$Tissue)
+    mat[j, 1] = tg
+    mat[j, 2] = length(ln)
+    mat[j, 3] = names(UniSamp)[i]
+  }
+  nn=mean(as.numeric(mat[which(mat[,1]=="NN", 1), 2]))
+  tt=mean(as.numeric(mat[which(mat[,1]=="TT", 1), 2]))
+  nt=mean(as.numeric(mat[which(mat[,1]=="NT" | mat[,1] == "TN", 1), 2]))
+  tn=mean(as.numeric(mat[which(mat[,1]=="NT" | mat[,1] == "TN", 1), 2]))
+
+  if(i == 1) {
+    TB = mat
+  } else {
+    TB = rbind(TB, mat)
+  }
+
+  layout(matrix(1:4, 2, 2))
+
+  ID=matrix(c(1,2,3,4,1,4,2,3), 4,2, byrow = T)
+  for(j in 1:4) {
+    idxP=which(!is.na(prot[,idx[ID[j,1]]]) & !is.na(prot[,idx[ID[j,2]]]))
+    plot(xlim=c(0, 25), ylim=c(0, 25), col="black", main=paste0(names(UniSamp)[i]," [", ID[j,1], ",", ID[j,2], "]"), xlab=paste0(PPP1$Tissue[idx[ID[j,1]]], ", ", PPP1$MS_ID[idx[ID[j,1]]], " [", length(which(!is.na(prot[idx[ID[j,1]]]))), "]"), ylab=paste0(PPP1$Tissue[idx[ID[j,2]]], ", ", PPP1$MS_ID[idx[ID[j,2]]], " [", length(which(!is.na(prot[idx[ID[j,2]]]))), "]"),
+prot[idxP, idx[ID[j,1]]], prot[idxP, idx[ID[j,2]]],
+pch=16, cex=0.5, bty='l')
+    idxP_1=which(!is.na(prot[idx[ID[j,1]]]) & is.na(prot[idx[ID[j,2]]]))
+    idxP_2=which(is.na(prot[ID[j,1]]) & !is.na(prot[idx[ID[j,2]]]))
+    l1=length(which(!is.na(prot[idx[ID[j,1]]])))
+    l2=length(which(!is.na(prot[idx[ID[j,2]]])))
+    points(prot[idxP_1, idx[ID[j,1]]], rep(0, length(idxP_1)), col="grey", pch=3, cex=0.2)
+    points(rep(0, length(idxP_2)), prot[idxP_2, idx[ID[j,2]]], col="grey", pch=3, cex=0.2)
+
+    abline(a=0, b=1, col="red", lty=2)
+    legend("topleft",
+           legend = c(format(length(idxP)/sqrt(l1*l2), digits = 4), format(length(idxP)/min(l1,l2), digits = 4), format(digits=4, cor(prot[idxP, idx[ID[j,1]]], prot[idxP, idx[ID[j,2]]]))),
+           pch=c(16, 16, 16), col=c("white", "white", "white"), bty = 'n')
+    legend("bottomright",
+           legend = c("Observed in both", "Observed in either"),
+           pch=c(16, 16), col=c("black", "grey"), bty = 'n')
+  }
+}
+
+```
+
+#### Annotation for G2007.0659
+The patient **G2007.0659** has its normal sample and tumor sample scanned independently on proCan 1 and 4, respectively. Top left is the correlation for the peptides of the normal tissue observed in proCan 1 and 4, respectively. The number of commonly observed peptides and their expression correlation can be found at the top left in each plot. The bottom left is for the tumor tissues, and the top left is between one of the normal tissue and one of the tumor tissue. Similarly for the bottom right panel.
+
+## Variance: Tech vs Biology
+```{r, VarTechBio}
+UniSamp=table(PPP1$USZ_ID)
+UniCor=matrix(-1, length(UniSamp), 6)
+
+for(i in 1:length(UniSamp)) {
+  idx=which(PPP1$USZ_ID == names(UniSamp)[i])
+  CB=combn(length(idx), 2)
+  mat=matrix(0, ncol(CB), 8)
+  #mat[,7]=100
+  for(j in 1:ncol(CB)) {
+    ln=which(!is.na(prot[,idx[CB[1,j]]]) & !is.na(prot[,idx[CB[2,j]]]))
+    ln1=which(!is.na(prot[,idx[CB[1,j]]]) & is.na(prot[,idx[CB[2,j]]]))
+    ln2=which(is.na(prot[,idx[CB[1,j]]]) & !is.na(prot[,idx[CB[2,j]]]))
+    if(length(ln) != 0 && length(ln1) !=0 && length(ln2) != 0) {
+      tg=paste0(PPP1[idx[CB[1,j]],]$Tissue, PPP1[idx[CB[2,j]],]$Tissue)
+      mat[j, 1] = tg
+      mat[j, 2] = length(ln)
+      mat[j, 3] = names(UniSamp)[i]
+      mat[j, 4] = cor(prot[ln, idx[CB[1,j]]], prot[ln, idx[CB[2,j]]])
+      mat[j, 5] = length(which(!is.na(prot[,idx[CB[1,j]]])))
+      mat[j, 6] = length(which(!is.na(prot[,idx[CB[2,j]]])))
+      pepDat=matrix(0, as.numeric(mat[j,5])+as.numeric(mat[j,6])-as.numeric(mat[j,2]), 2)
+      pepDat[1:length(ln),1]=prot[ln,idx[CB[1,j]]]
+      pepDat[1:length(ln),2]=prot[ln,idx[CB[2,j]]]
+      pepDat[(length(ln)+1):as.numeric(mat[j,5]),1]=prot[ln1, idx[CB[1,j]]]
+      pepDat[(as.numeric(mat[j,5])+1):nrow(pepDat),2]=prot[ln2, idx[CB[2,j]]]
+      mat[,8] = cor(pepDat[,1], pepDat[,2])
+    }
+  }
+  nn=mean(as.numeric(mat[which(mat[,1]=="NN", 1), 2]))
+  tt=mean(as.numeric(mat[which(mat[,1]=="TT", 1), 2]))
+  nt=mean(as.numeric(mat[which(mat[,1]=="NT" | mat[,1] == "TN", 1), 2]))
+  tn=mean(as.numeric(mat[which(mat[,1]=="NT" | mat[,1] == "TN", 1), 2]))
+
+  cnt=0
+  if(length(which(mat[,1] == "NN") > 0)) {
+    UniCor[i,1] = mean(as.numeric(mat[mat[,1]=="NN",4]))
+    cnt=cnt+1
+  }
+  if(length(which(mat[,1] == "TT") > 0)) {
+    UniCor[i,2] = mean(as.numeric(mat[mat[,1]=="TT",4]))
+    cnt=cnt+1
+  }
+  if(length(which(mat[,1] == "NT" | mat[,1] == "TN") > 0)) {
+    UniCor[i,3] = mean(as.numeric(mat[mat[,1]=="NT" || mat[,1] == "TN",4]))
+    cnt=cnt+1
+  }
+  if(cnt==3) {
+    z1=1-UniCor[i,1]
+    z2=1-UniCor[i,2]
+    z3=1-UniCor[i,3]
+    UniCor[i,4]=z1/(z1+z2+z3)
+    UniCor[i,5]=z2/(z1+z2+z3)
+    UniCor[i,6]=z3/(z1+z2+z3)
+  }
+  if(i == 1) {
+    TB = mat
+  } else {
+    TB = rbind(TB, mat)
+  }
+}
+colnames(UniCor)=c("", "", "", "Var (Tech normal)", "Var (Tech tumor)", "Var (Biology)")
+idxCor=which(UniCor[,4]>0 & UniCor[,5]>0 & UniCor[,6]>0)
+boxplot(UniCor[idxCor,4:6], ylab="Proportion of variance", col=c("yellow", "red", "blue"))
+```
+
+#### Variance analysis
+
+There are three kinds of pairs:
+
+1. $r_{N,N}=cor(N_1, N_2)$, correlation between a pair of normal samples, indicating technical variation.
+
+2. $r_{T,T}=cor(T_1, T_2)$, correlation between a pair of tumor sample, indicating technical variation.
+
+3. $r_{N,T}=r_{T,N}=cor(N, T)=cor(T,N)$, correlation between a normal sample and a tumor sample, indicating biological variation.
+
+Then the proportion of total variance can be partitioned into 
+
+1. $V(Tech N)=\frac{r_{N_1,N_2}}{r_{N_1,N_2}+r_{T_1,T_2}+r_{N,T}}$
+
+2. $V(Tech T)=\frac{r_{T_1,T_2}}{r_{N_1,N_2}+r_{T_1,T_2}+r_{N,T}}$
+
+3. $V(Tech Bio)=\frac{r_{N,T}}{r_{N_1,N_2}+r_{T_1,T_2}+r_{N,T}}$
+
+## Peptide count differentiation
+```{r, CountSample}
+TtestM=as.data.frame(matrix(0, 6, 3))
+colnames(TtestM)[1:3]=c("M1", "M2", "p-value")
+lb=c("NN", "NT", "TN", "TT")
+cnt=1
+for(i in 2:length(lb)) {
+  for(j in 1:(i-1)) {
+    rownames(TtestM)[cnt]=paste0(lb[i], "-", lb[j])
+    tt=t.test(as.numeric(TB[which(TB[,1]==lb[i]), 2]), as.numeric(TB[which(TB[,1]==lb[j]), 2]))
+    TtestM[cnt,c(1,2)]=tt$estimate[1:2]
+    TtestM[cnt,3]=tt$p.value
+    cnt=cnt+1
+  }
+}
+
+library(knitr)
+kable(TtestM, caption = "Counts between different sample pairs")
+
+lb=c("NN", "NT", "TN", "TT")
+cntMat=as.data.frame(matrix(0, length(UniSamp), 4))
+colnames(cntMat)=lb
+for(i in 1:length(UniSamp)) {
+  idx=which(TB[,3] == names(UniSamp)[i])
+  if(length(idx) == 0) {
+    break
+  }
+  tbSet=as.data.frame(TB[idx,])
+  for(j in 1:length(lb)) {
+    idx1=which(tbSet[,1] == lb[j])
+    if(length(idx1) > 0) {
+      cntMat[i, j] = mean(as.numeric(as.character(tbSet[idx1, 2])))
+    }
+  }
+}
+
+layout(matrix(c(1, 1, 2, 3, 4, 5, 6, 7), 2, 4, byrow = F))
+boxplot(cntMat, col=c("gold", 2:4), bty='l')
+for(i in 1:(length(lb)-1)) {
+  for(j in (i+1):length(lb)) {
+    idx=which(cntMat[,i] > 0 & cntMat[,j])
+    mod=lm(cntMat[idx,i]~cntMat[idx,j])
+    matUniFt=as.matrix(cntMat[idx, c(i,j)])
+    tp=t.test(cntMat[idx,i], cntMat[idx,j])
+    colnames(matUniFt)=c(lb[i], lb[j])
+
+    plot(bty='n', xlab=lb[i], ylab=lb[j], cntMat[idx,i], cntMat[idx,j], xlim=c(0, 10000), ylim=c(0, 10000), col=ifelse(cntMat[idx,i]<3000 | cntMat[idx,j]<3000, "black", "grey"), pch=ifelse(cntMat[idx,i]>cntMat[idx,j], 16, 1))
+    rug(cntMat[idx,i], side=1, col="red")
+    rug(cntMat[idx,j], side=2, col="blue")
+    abline(a=0, b=1, col="grey", lty=2)
+    abline(mod, col="grey", lwd=2)
+    legend("topleft", legend = c(paste0(lb[i],"=", format(mod$coefficients[1], digits = 3), "+", format(mod$coefficients[2], digits=3), "*", lb[j], "+e")), bty='n', lty=1, col="grey")
+  }
+}
+```
+
+#### Annotation
+t-test for the difference of counts of observed peptides between a pair of samples.
+
+
+## Correlation at various levels
+```{r, corAQ}
+TSnames=c("AQUA", "CTRL", "Normal", "Tumor")
+Aidx=which(PPP1$Tissue == "A")
+Cidx=which(PPP1$Tissue == "C")
+Nidx=which(PPP1$Tissue == "N")
+Tidx=which(PPP1$Tissue == "T")
+IDX=c(length(Aidx), length(Cidx), length(Nidx), length(Tidx))
+
+TSidx=list(Aidx)
+TSidx[2]=list(Cidx)
+TSidx[3]=list(Nidx)
+TSidx[4]=list(Tidx)
+
+####AQ
+PPP1_A=PPP1[TSidx[[1]],]
+exDat_A=protT[TSidx[[1]],]
+
+batchName=names(table(PPP1_A$Batch))
+AQcor=matrix(0, length(batchName), 6)
+cnt=0
+for(i in 1:length(batchName)) {
+  if(length(which(PPP1_A$Batch == i))!=2) next 
+  cnt=cnt+1
+  ex2=exDat_A[which(PPP1_A$Batch==i),]
+  n1=length(which(!is.na(ex2[1,])))
+  n2=length(which(!is.na(ex2[2,])))
+  no=length(which(!is.na(ex2[1,]) & !is.na(ex2[2,])))
+  ct=cor.test(ex2[1,], ex2[2,])
+  AQcor[cnt,1:6]=c(ct$estimate, n1, n2, no, no/sqrt(n1*n2), no/min(n1,n2))
+}
+
+####CTRL
+PPP1_CL=PPP1[TSidx[[2]],]
+exDat_CL=protT[TSidx[[2]],]
+
+batchNameCL=names(table(PPP1_CL$Batch))
+CLcor=matrix(0, length(batchNameCL), 6)
+CLcnt=0
+for(i in 1:length(batchNameCL)) {
+  if(length(which(PPP1_CL$Batch == i))!=2) next 
+  CLcnt=CLcnt+1
+  ex2=exDat_CL[which(PPP1_CL$Batch==i),]
+  n1=length(which(!is.na(ex2[1,])))
+  n2=length(which(!is.na(ex2[2,])))
+  no=length(which(!is.na(ex2[1,]) & !is.na(ex2[2,])))
+  ct=cor.test(ex2[1,], ex2[2,])
+  CLcor[CLcnt,1:6]=c(ct$estimate, n1, n2, no, no/sqrt(n1*n2), no/min(n1,n2))
+}
+
+layout(matrix(1:6, 3, 2))
+
+hist(main="AQUA", AQcor[1:cnt,5], xlim=c(0, 1), xlab="Correlation (Overlapping)")
+legend("topleft", legend = format(mean(AQcor[1:cnt,5]), digits = 3), bty='n')
+hist(main="AQUA", AQcor[1:cnt,6], xlim=c(0, 1), xlab="Correlation (Normalized)")
+legend("topleft", legend = format(mean(AQcor[1:cnt,6]), digits = 3), bty='n')
+hist(main="AQUA", AQcor[1:cnt,1], xlim=c(0, 1), xlab="Correlation expression")
+legend("topleft", legend = format(mean(AQcor[1:cnt,1]), digits = 3), bty='n')
+
+hist(main="CTRL", CLcor[1:CLcnt,5], xlim=c(0, 1), xlab="Correlation (Overlapping)")
+legend("topleft", legend = format(mean(CLcor[1:CLcnt,5]), digits = 3), bty='n')
+
+hist(main="CTRL",
+     CLcor[1:CLcnt,6], xlim=c(0, 1), xlab="Correlation (Normalized)")
+legend("topleft", legend = format(mean(CLcor[1:CLcnt,6]), digits = 3), bty='n')
+
+hist(main="CTRL",
+     CLcor[1:CLcnt,1], xlim=c(0, 1), xlab="Correlation expression")
+legend("topleft", legend = format(mean(CLcor[1:CLcnt,1]), digits = 3), bty='n')
+
+layout(matrix(1:12, 3, 4))
+
+TAG=c("NN", "NT", "TN", "TT")
+for(i in 1:length(TAG)) {
+  idxTT=which(TB[,1]==TAG[i] & as.numeric(TB[,2])>0)
+  hist(main=paste0(TAG[i], " [", length(idxTT),"]"), breaks = 40, ylim=c(0, 120), xlab="Correlation (Overlapping)", xlim =c(0.3, 1), as.numeric(TB[idxTT,2])/sqrt(as.numeric(TB[idxTT,5])*as.numeric(TB[idxTT,6])))
+  legend("topleft", legend = format(mean(as.numeric(TB[idxTT,2])/sqrt(as.numeric(TB[idxTT,5])*as.numeric(TB[idxTT,6]))), digits = 4), bty='n')
+
+  DidxTT=apply(matrix(c(as.numeric(TB[idxTT, 5]), as.numeric(TB[idxTT,6])), length(idxTT),2), 1, min)
+  hist(main=paste(TAG[i]), breaks = 40, ylim=c(0, 120), xlab="Correlation (Normalized)", xlim =c(0.3, 1), as.numeric(TB[idxTT,2])/DidxTT, col="red")
+  legend("topleft", legend = format(mean(as.numeric(TB[idxTT,2])/DidxTT), digits = 4), bty='n')
+
+  hist(main=paste(TAG[i]), breaks = 40, ylim=c(0, 120), xlab="Correlation (Pearson)", xlim =c(0.3, 1), as.numeric(TB[idxTT,4]), col="green")
+  legend("topleft", legend = format(mean(as.numeric(TB[idxTT,4])), digits = 4), bty='n')
+}
+
+```
+
+#### Proportion of variance
+Each column represents one of four possible sample pairs.
+
+1. **Top row**: $cor_1=\frac{n_{o}}{\sqrt{n_1n_2}}$ without normalization.
+
+2. **Middle row**: $cor_2=\frac{n_{o}}{min(n_1,n_2)}$ normalized correlation.
+
+3. **Bottom row**: $cor_3=cor(exp_1,exp_2)$ for $n_o$ peptides.
+
+## Expression vs counts: across 6 MZ
+
+Gold points are those peptides that had counts less than 20% of the normal and tumor samples observed respectively.
+```{r, 6MZ}
+layout(matrix(1:6, 2, 3))
+ms=c("PC1", "PC2", "PC3", "PC4", "PC5", "PC6")
+for(m in 1:length(ms)) {
+
+  mat=matrix(0, ncol(protT), 4)
+  idxN=which(PPP1$Tissue == "N" & PPP1$MS_ID == ms[m])
+  idxT=which(PPP1$Tissue == "T" & PPP1$MS_ID == ms[m])
+  for(i in 1:ncol(protT)) {
+    mat[i,1]=length(which(!is.na(protT[idxN,i])))
+    mat[i,2]=length(which(!is.na(protT[idxT,i])))
+    protNor=protT[idxN,i]
+    protTr=protT[idxT,i]
+    mat[i,3]=mean(as.numeric(protNor), na.rm = T)
+    mat[i,4]=mean(as.numeric(protTr), na.rm = T)
+  }
+
+  plot(main=paste(ms[m], "T:", length(idxT), ", N:", length(idxN)), xlim=c(-100, 150), ylim=c(-5,5), mat[,2]-mat[,1], mat[,4]-mat[,3], pch=16, cex=0.1, bty="l", col="grey", xlab="Count (T-N)", ylab="Expression (T-N)")
+  abline(h=0, lty=2, col="red")
+  idxDiff=which(abs(mat[,4]-mat[,3])>1.5 & mat[,1]<length(idxN)*0.2 & mat[,2]<length(idxT)*0.2)
+  points(mat[idxDiff,2]-mat[idxDiff,1], mat[idxDiff,4]-mat[idxDiff,3], col="gold", pch=1, cex=0.3)
+  
+  mm=mat[idxDiff,]
+  rownames(mm)=colnames(protT[,idxDiff])
+  colnames(mm)=c("Cnt[N]", "Cnt[T]", "Exp[N]", "Exp[T]")
+  write.table(mm, paste0("extreme_pro", m,".txt"), row.names = T, col.names = T, quote = F)
+}
+```
+
+```{r, 6MZ tab}
+for(i in 1:length(ms)) {
+  exTab=read.table(paste0("extreme_pro", i, ".txt"), as.is = T, header = T)
+  print(exTab)
+}
+```
+
+
+## 3D plot
+
+```{r, ExpCount cal}
+matN=matrix(1, ncol(protT), 7)
+for(i in 1:ncol(protT)) {
+  iN=which(PPP1$Tissue == "N")
+  iT=which(PPP1$Tissue == "T")
+  matN[i,1]=length(which(!is.na(protT[iN, i])))
+  matN[i,2]=mean(as.numeric(protT[iN, i]),na.rm = T)
+  matN[i,3]=length(which(!is.na(protT[iT, i])))
+  matN[i,4]=mean(as.numeric(protT[iT, i]), na.rm = T)
+  matN[i,6]=sd(as.numeric(protT[iN, i]), na.rm = T)
+  matN[i,7]=sd(as.numeric(protT[iT, i]), na.rm = T)
+  if(matN[i,1] > 10 && matN[i,3]>10) {
+    matN[i,5]=t.test(as.numeric(protT[iN, i]), as.numeric(protT[iT, i]))$p.value
+  }
+}
+```
+
+The peptides have less than 15 observations are in red.
+
+```{r, 3D}
+library(scatterplot3d)
+scatterplot3d(main="Normal", matN[,1], matN[,2], matN[,6], cex.symbols =0.3, pch=16, xlab = "Peptide count", ylab="Exp", zlab="Sigma", color = ifelse(matN[,1]<15, "red", "grey"))
+scatterplot3d(main="Tumor", matN[,3], matN[,4], matN[,7], cex.symbols =0.3, pch=16, xlab = "Peptide count", ylab="Exp", zlab="Sigma", color = ifelse(matN[,1]<15, "red", "grey"))
+
+```
+
+
+## Expression vs Count
+```{r, ExpCount plot}
+
+layout(matrix(1:4, 2, 2, byrow = T))
+for(i in c(2, 4)) {
+  od=order(matN[,2])
+  plot(main=paste0("Expression: T/N>", i), axes=F, xlab="Peptide Count", ylab="", col="grey", -1*matN[od,3], matN[od,4], cex=0.1, pch=16, xlim=c(-720, 720), ylim=c(10, 35))
+  lines(spline(-1*matN[od,3], matN[od,4]), col="yellow")
+  points(col="grey20", matN[od,1], matN[od,2], cex=0.2, pch=16, xlim=c(720,0), ylim=c(10, 24))
+  lines(spline(matN[od,1], matN[od,2]), col="yellow")
+
+  pi=which(matN[od,5] < 0.05/nrow(prot) & (matN[od,4]-matN[od,2]) > log2(i))
+
+  points(-1*matN[od[pi],3], matN[od[pi],4], col="red", cex=0.5, pch=16)
+
+  points(mean(-1*matN[od[pi],3]), mean(matN[od[pi],4]), col="red", pch=1, cex=2, lwd=4)
+  points(matN[od[pi],1], matN[od[pi],2], col="green", cex=0.5, pch=16)
+  points(mean(matN[od[pi],1]), mean(matN[od[pi],2]), col="green", pch=1, cex=2, lwd=4)
+  
+  abline(v=0, lty=2)
+  axis(side=1, at=c(-700, -200, 0, 200, 700), labels = c(700, 200, 0, 200, 700))
+  axis(side=2, at=c(10, 15, 20, 25))
+  axis(side=2, at=c(17), labels = c("Expression (T)"), line=1)
+  axis(side=4, at=c(10, 15, 20, 25))
+  axis(side=4, at=c(17), labels = c("Expression (N)"), line=1)
+  legend("topleft", legend = length(pi), pch=1, col="white", bty='n')
+  legend("topright", legend = c("T", "N"), col=c("grey", "grey20"), pch=16, bty='n')
+}
+
+for(i in c(1.5,2)) {
+  od=order(matN[,2])
+  plot(main=paste0("Expression: T/N >", i), axes=F, xlab="Peptide Count", ylab="", col="grey", -1*matN[od,3], matN[od,4], cex=0.2, pch=16, xlim=c(-720, 720), ylim=c(10, 35))
+  lines(spline(-1*matN[od,3], matN[od,4]), col="yellow")
+
+  points(col="grey20", matN[od,1], matN[od,2], cex=0.2, pch=16, xlim=c(720,0), ylim=c(10, 24))
+  lines(spline(matN[od,1], matN[od,2]), col="yellow")
+
+  pi=which(matN[od,5] < 0.05/nrow(prot) & (matN[od,2]-matN[od,4]) > log2(i))
+  points(-1*matN[od[pi],3], matN[od[pi],4], col="red", cex=0.5, pch=16)
+  points(mean(-1*matN[od[pi],3]), mean(matN[od[pi],4]), col="red", pch=1, cex=2, lwd=4)
+  points(matN[od[pi],1], matN[od[pi],2], col="green", cex=0.5, pch=16)
+  points(mean(matN[od[pi],1]), mean(matN[od[pi],2]), col="green", pch=1, cex=2, lwd=4)
+  
+  abline(v=0, lty=2)
+  axis(side=1, at=c(-700, -200, 0, 200, 700), labels = c(700, 200, 0, 200, 700))
+  axis(side=2, at=c(10, 15, 20, 25))
+  axis(side=2, at=c(17), labels = c("Expression (T)"), line=1)
+  axis(side=4, at=c(10, 15, 20, 25))
+  axis(side=4, at=c(17), labels = c("Expression (N)"), line=1)
+  legend("topleft", legend = length(pi), pch=1, col="white", bty='n')
+  legend("topright", legend = c("T", "N"), col=c("grey", "grey20"), pch=16, bty='n')
+}
+points(mean(-1*matN[od,3], na.rm = T), mean(matN[od,4], na.rm = T), col="white", cex=2, lwd=2)
+points(mean(matN[od,1], na.rm = T), mean(matN[od,2], na.rm = T), col="white", cex=2, lwd=2)
+```
+
+## Sigmaplot
+```{r, sigmaPlot}
+layout(matrix(1:4, 2, 2))
+
+plot(main="Normal", matN[,2], matN[,6], bty="l", xlab="Expression [N]", ylab=expression(paste(sigma[N])), cex=0.3, pch=16, ylim=c(0, 3.5))
+abline(lm(matN[,6]~matN[,2]), col="green")
+odN=order(matN[,1])
+plot(matN[,1], matN[,6], cex=0.3, pch=16, ylab=expression(paste(sigma[N])), xlab="Count", bty="l", main="Normal", ylim=c(0, 3.5))
+lines(spline(matN[,1], matN[,6], n=nrow(matN)/100), col="green")
+
+odT=order(matN[,3])
+
+plot(main="Tumor", matN[,4], matN[,7], bty="l", xlab="Expression [T]",
+ylab=expression(paste(sigma[T])), cex=0.3, pch=16, ylim=c(0, 3.5))
+abline(lm(matN[,7]~matN[,4]), col="yellow")
+
+plot(matN[,3], matN[,7], cex=0.3, pch=16, ylab=expression(paste(sigma[T])), xlab="Count", bty="l", main="Tumor", ylim=c(0, 3.5))
+lines(spline(matN[,3], matN[,7], n=nrow(matN)/100), col="yellow")
+
+```
+
+## Significant expression table 
+```{r, ExpCountTab}
+rownames(matN)=rownames(prot)
+colnames(matN)=c("Cnt[N]", "Exp[N]", "Cnt[T]", "Exp[T]", "p-value", "Sigma[N]", "Sigma[T]")
+
+write.table(matN, "ExpDat.txt", row.names = T, col.names = T, quote = F)
+od=order(matN[,2])
+pi1=which(matN[od,5] < 0.05/nrow(prot) & (matN[od,4]-matN[od,2]) > log2(2))
+pi2=which(matN[od,5] < 0.05/nrow(prot) & (matN[od,2]-matN[od,4]) > log2(1.5))
+
+expMat=matN[od[c(pi1, pi2)], ]
+library(knitr)
+colnames(expMat)=c("Count[N]", "Exp[N]", "Count[T]", "Exp[T]", "p-value", "Sig[N]", "Sig[T]")
+rownames(expMat)=row.names(prot[od[c(pi1,pi2)],])
+kable(expMat)
+
+```
+
+## Speculation
+```{r, Speculation}
+dis1=rnorm(10000, 6)
+dis2=rnorm(10000, 6)
+tail1=rchisq(1000,1, ncp=2)+6
+tail2=0.95*tail1+rnorm(1000)
+tail3=rnorm(100,6)
+tail4=rchisq(100, 1, ncp=2)+6
+plot(main="Speculation", ylim=c(0, 30), xlim=c(0, 30), bty='n', xlab="Normal", ylab="Tumor", c(dis1, tail1, tail3), c(dis2, tail2, tail4), pch=16, cex=0.5)
+points(tail1, tail2, col="green", pch=1, cex=1, lwd=2)
+points(tail3, tail4, col="pink", pch=1, cex=1, lwd=2)
+points(dis1, dis2, pch=16, cex=0.5, col="black")
+legend("bottomright", legend = c("Captured", "Hidden", "Not interested"), pch=c(1,1,16), col=c("green", "pink", "black"), bty='n')
+```
+
+#### different by degree rather than kind
+
+### End tabset
