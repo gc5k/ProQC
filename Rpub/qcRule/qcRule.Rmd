@@ -1,0 +1,429 @@
+---
+title: "Deriving the principle for data analysis"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: false
+#    theme: united
+#    highlight: tango
+    code_folding: hide
+---
+
+
+```{r, dataProcess, echo=TRUE}
+##read data
+source("./R/qcFun.R")
+
+dataList=c("./data/2019_protein_normal.txt",
+           "./data/2019_protein_normal_impute.txt",
+           "./data/2019_protein_normal_impute_combat.txt",
+
+           "./data/2019_protein_no_normal.txt",
+           "./data/2019_protein_no_normal_combat.txt",
+           "./data/2019_protein_no_normal_impute.txt",
+           "./data/2019_protein_no_normal_impute_combat.txt"
+           )
+
+proFile=dataList[3]
+proFile="2018-05-21pppb_prot.txt"
+
+prot=read.table(proFile, as.is = T, header = T)
+rownames(prot)=prot[,1]
+prot=prot[,-c(1,2)]
+PPP0=read.csv("PPPB1_lineup.csv", as.is = T, header = T)
+PPP1=PPP0
+PPP1$PPPA_ID=tolower(PPP1$PPPA_ID)
+
+datmp=t(prot)
+
+###line up protein matrix and datmp
+exDat=matrix(0, nrow(datmp), ncol(datmp))
+rID=matrix(0, nrow(datmp), 1)
+for (i in 1:nrow(PPP1)) {
+  idx=which(rownames(datmp) == PPP1$PPPA_ID[i])
+  rID[i,1]=idx
+  exDat[i,] = datmp[idx,]
+}
+rownames(exDat) = PPP1$PPPA_ID[rID[,1]]
+colnames(exDat) = rownames(prot)
+
+#evaluate missing value
+missCut=0.8
+misD=matrix(1, nrow(exDat), 4)
+for(i in 1:nrow(misD)) {
+  naIdx=which(is.na(exDat[i,]))
+  if (length(naIdx) < ncol(exDat) ) {
+    misD[i, 1] = length(naIdx)/ncol(exDat)
+    misD[i, 2] = min(datmp[i,-naIdx])
+    misD[i, 3] = median(exDat[i, -naIdx])
+    misD[i, 4] = mean(exDat[i, -naIdx])
+  }
+}
+blankInd = which(misD[,1]> missCut)
+
+hist(misD[,1], breaks = 50, main="Missing per sample", xlab="Missing rate")
+
+if(length(blankInd)> 0) {
+  exDat=exDat[-blankInd,]
+  PPP1=PPP1[-blankInd,]
+}
+
+###quantile normalization
+###https://en.wikipedia.org/wiki/Quantile_normalization
+library(preprocessCore)
+
+#exDat1=exDat
+#qdat=t(normalize.quantiles(t(exDat1)))
+
+qdat=exDat
+rownames(qdat)=rownames(exDat)
+colnames(qdat)=colnames(exDat)
+
+for(i in 1:ncol(datmp)) {
+  idx=which(rownames(qdat) == rownames(datmp)[i])
+  if(length(idx) > 0) {
+    datmp[i,] = qdat[idx,]
+  }
+}
+write.table(t(datmp), "Apr_PPP1.txt", row.names = T, col.names = T, quote=F)
+
+```
+
+```{r, proQC, echo=TRUE}
+###proQC package
+qdat=t(read.table("Apr_PPP1.txt", as.is = T, header = T)) #row for individual, column for protein
+
+PPP1=read.csv("PPPB1_lineup.csv", as.is = T, header = T)
+indM=array(0, nrow(qdat))
+for(i in 1:nrow(qdat)) {
+  indM[i]=length(which(is.na(qdat[i,])))
+}
+idx=which(indM/ncol(qdat) > 0.8)
+if(length(idx) > 0) {
+  qdat=qdat[-idx,]
+  PPP1=PPP1[-idx,]
+}
+
+```
+
+```{r, proDencity, echo=TRUE}
+######Slide 1: density plot
+print("Slide 1: A-AQUA, C-CTRL, N-Normal, T-Tumor")
+proDensityPlot(qdat, PPP1$Tissue)
+
+```
+
+Quality score is defined as $$Q=\frac{\sum_{i=1}^\tilde{M}\tilde{s}_i(k-\frac{n_o}{n})^c}{\sum_{i=1}^Ms_i}$$
+in which $\tilde{s}_i=[y_i-(E(y_i|n_{o_i})+T_{\alpha/M}\sigma_i)]^2$ if $y_i > E(y_i|n_{o_i})$ or $\tilde{s}_i=[y_i-(E(y_i|n_{o_i})-T_{\alpha/M}\sigma_i)]^2$ if $y_i < E(y_i|n_{o_i})$.
+In contrast, $s_i=[y_i-E(y_i|n_{o_i})]^2$.
+
+$T_{\alpha/M}$ is the z-score given the p-value cutoff $\alpha/M$, and $\alpha$ can be for example 0.01 or 0.05.
+
+$E(y_i|n_{o_i})$ can be predicted from the fitted spline.
+
+$\alpha$ determins the confidence interval of the spline. The smaller the $\alpha$, the larger the interval and the smaller $\tilde{M}$ till zero.
+
+$K$, between 0 and 1, indicates the direction of the penalty. When it is 1, the penalty is  more weighted on the proteins with fewer observations, and nearly no penalty at all for proteins without missing values.   
+
+$C$ is the penalty for the score.
+
+In summary, the quality score is upon $M$, $\alpha$, $K$, and $C$.
+```{r, Qscore, echo=TRUE}
+#####Slide 2: Missing plot
+print("Slide 2: Qscore")
+
+Qalpha=0.05
+TAG=c("A", "C", "N", "T")
+
+indMPro=list(qdat[PPP1$Tissue==TAG[1],], 
+             qdat[PPP1$Tissue==TAG[2],],
+             qdat[PPP1$Tissue==TAG[3],],
+             qdat[PPP1$Tissue==TAG[4],])
+
+layout(matrix(1:(length(TAG)+1), 1, (length(TAG)+1)))
+
+QStest=array(0, dim=c(6, length(TAG)))
+colnames(QStest)=TAG
+for(i in 1:length(TAG)) {
+  refAmean=colMeans(indMPro[[i]], na.rm = T)
+  refObsPro=array(1, dim=length(refAmean))
+  for(j in 1:length(refAmean)) {
+    if(length(which(!is.na(indMPro[[i]][,j])))>0) {
+      refObsPro[j] = length(which(!is.na(indMPro[[i]][,j])))
+    }
+  }
+
+  idNA=which(is.na(refAmean))
+  if(length(idNA)>0) {
+    ss=smooth.spline(1-refObsPro[-idNA]/nrow(indMPro[[i]]), refAmean[-idNA], df=5)
+    err=qnorm(1-Qalpha/length(refAmean[-idNA])/2)*sd(ss$x)
+  } else {
+    ss=smooth.spline(1-refObsPro/nrow(indMPro[[i]]), refAmean, df=5)
+    err=qnorm(1-Qalpha/length(refAmean)/2)*sd(ss$x)
+  }
+
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=0, C=0.5)
+  QStest[1,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=1, C=0.5)
+  QStest[2,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=0, C=1)
+  QStest[3,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=1, C=1)
+  QStest[4,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=0, C=2)
+  QStest[5,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=1, C=2)
+  QStest[6,i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+}
+print(QStest)
+layout(matrix(1:2, 1, 2))
+barplot(main="K=0 (remove low missing rate)", QStest[c(1,3,5),], beside = T, border = NA, ylim=c(0, max(QStest)*1.2))
+barplot(main="K=1 (remove high missing rate)", QStest[c(2,4,6),], beside = T, border = NA, ylim=c(0, max(QStest)*1.2))
+legend("topright", legend = paste("C=", c(0.5, 1, 2)), pch=15, col=c("grey10", "grey50", "grey80"))
+```
+
+```{r, missingCurve, echo=TRUE}
+
+  ##QS
+Qalpha=0.05
+TAG=c("A", "C", "N", "T")
+
+indMPro=list(qdat[PPP1$Tissue==TAG[1],], 
+             qdat[PPP1$Tissue==TAG[2],],
+             qdat[PPP1$Tissue==TAG[3],],
+             qdat[PPP1$Tissue==TAG[4],])
+
+layout(matrix(1:(length(TAG)+1), 1, (length(TAG)+1)))
+qdatAC=qdat[PPP1$Tissue==TAG[1] | PPP1$Tissue==TAG[2],]
+
+refAmean=colMeans(qdatAC, na.rm = T)
+refObsPro=array(1, dim=length(refAmean))
+for(i in 1:length(refAmean)) {
+  if(length(which(!is.na(qdatAC[,i])))>0) {
+    refObsPro[i] = length(which(!is.na(qdatAC[,i])))
+  }
+}
+idNA=which(is.na(refAmean))
+
+plot(bty='n', main="A+C", xlab="Missing rate", ylab="Expression",
+     xlim=c(0, 1), ylim=c(0, 23),
+     1-refObsPro[-idNA]/nrow(qdatAC[-idNA,]),
+     refAmean[-idNA],
+     cex=0.5,pch=16, col="grey")
+
+ssAC=smooth.spline(1-refObsPro[-idNA]/nrow(qdatAC[-idNA,]), refAmean[-idNA], df=5)
+err=qnorm(1-Qalpha/length(refAmean)/2)*sd(ssAC$x)
+lines(ssAC, col="green", lty=1, lwd=3)
+lines(ssAC$x, ssAC$y+err, col="green", lty=3, lwd=2)
+lines(ssAC$x, ssAC$y-err, col="green", lty=3, lwd=2)
+
+Qscore=array(0, dim=length(TAG))
+for(i in 1:length(TAG)) {
+  refAmean=colMeans(indMPro[[i]], na.rm = T)
+  refObsPro=array(1, dim=length(refAmean))
+  for(j in 1:length(refAmean)) {
+    if(length(which(!is.na(indMPro[[i]][,j])))>0) {
+      refObsPro[j] = length(which(!is.na(indMPro[[i]][,j])))
+    }
+  }
+
+  idNA=which(is.na(refAmean))
+  ss=smooth.spline(1-refObsPro[-idNA]/nrow(indMPro[[i]]), refAmean[-idNA], df=5)
+  err=qnorm(1-Qalpha/length(refAmean)/2)*sd(ss$x)
+
+  Qs=QScore(refAmean, refObsPro, nrow(indMPro[[i]]), Qpval = Qalpha, K=1, C=2)
+  Qscore[i] = mean(abs(Qs[,6]), na.rm = T)/mean(Qs[,4],na.rm = T)
+
+  plot(bty='n', main=paste(TAG[i], ": Qscore=", format(1-Qscore[i], digits = 3)), 
+       xlab="Missing rate", ylab="Expression", 
+       xlim=c(0, 1), ylim=c(0, 23), 
+       1-refObsPro/nrow(indMPro[[i]]), refAmean,cex=0.5,pch=16, col="grey")
+
+  if(i==1) {
+    ssA=smooth.spline(1-refObsPro[-idNA]/nrow(indMPro[[i]]), refAmean[-idNA], df=5)
+  }
+  lines(ssA, col="blue", lty=2, lwd=3)
+  lines(ss, col=ifelse(i!=1, "red", "blue"), lty=1, lwd=3)
+  lines(ss$x, ss$y+err, col=ifelse(i!=1, "red", "blue"), lty=3, lwd=1)
+  lines(ss$x, ss$y-err, col=ifelse(i!=1, "red", "blue"), lty=3, lwd=1)
+
+}
+
+```
+
+```{r, power, echo=TRUE}
+alpha=0.05
+beta=0.2
+
+qdatT=list(a=qdat[PPP1$Tissue==TAG[1],],
+           c=qdat[PPP1$Tissue==TAG[2],],
+           n=qdat[PPP1$Tissue==TAG[3],], 
+           t=qdat[PPP1$Tissue==TAG[4],])
+pT=matrix(NA, ncol(qdat), 7)
+missT=matrix(NA, ncol(qdat), 7)
+naCnt=matrix(NA, ncol(qdat), 2)
+for(i in 1:nrow(pT)) {
+  naCnt[i,1]=naN=length(which(!is.na(qdatT$n[,i])))
+  naCnt[i,2]=naT=length(which(!is.na(qdatT$t[,i])))
+             
+  if(naN > 1 && naT > 1) {
+    tt=t.test(qdatT$t[,i], qdatT$n[,i])
+
+    pT[i,c(1,2)] = c(tt$statistic, tt$parameter)
+    pT[i,3]=-1*pt(abs(pT[i,1]), pT[i,2], lower.tail=FALSE, log.p=T)/log(10) - log10(2)
+    pT[i,c(4,5)]=tt$estimate
+    pT[i,6]=var(qdatT$n[,i], na.rm = T)
+    pT[i,7]=var(qdatT$t[,i], na.rm = T)
+
+    mTT=t.test(c(rep(1, naT), rep(0, nrow(qdatT$t))),
+               c(rep(1, naN), rep(0, nrow(qdatT$n)))) 
+    missT[i,c(1,2)] = c(mTT$statistic, mTT$parameter)
+    missT[i,3]=-1*pt(abs(missT[i,1]), missT[i,2], lower.tail=FALSE, log.p=T)/log(10) - log10(2)
+
+  }
+}
+
+#
+mat=matrix(0, 4, 4)
+mat[col(mat)<row(mat)]=seq(1,11,2)
+mat=t(mat)
+mat[col(mat)<row(mat)]=seq(2,12,2)
+diag(mat)=13
+mat=t(mat)
+
+layout(mat)
+par(mai=c(0.2,0.2,0.2,0.2))
+for(i in 1:3) {
+  for(j in (i+1):4) {
+    mT=colMeans(qdatT[[i]], na.rm = T)
+    mN=colMeans(qdatT[[j]], na.rm = T)
+    id=which(!is.na(mT)&!is.na(mN))
+    mTclean=mT[id]
+    mNclean=mN[id]
+    rkT=order(mTclean)
+    rkN=order(mNclean)
+    plot(main=paste(length(mNclean), TAG[i], "vs", TAG[j]), mNclean[rkT], col=j, cex=0.5, bty='n')
+    points(1:length(mTclean), mTclean[rkT], pch=16, cex=0.5, col=i)
+
+    plot(main=paste(length(mTclean), TAG[j], "vs", TAG[i]), mTclean[rkN], col=i, cex=0.5, bty='n')
+    points(1:length(mNclean), mNclean[rkN], pch=16, cex=0.5, col=j)
+  }
+}
+
+```
+
+
+```{r, gc, echo=TRUE}
+## slide 3: gc
+print("Slide 3: GC control")
+
+print("Bartlett test")
+BTpval=array(1, ncol(qdat))
+for(i in 1:length(BTpval)) {
+  ll=array(0, 4)
+  for(j in 1:length(TAG)) {
+    ll[j]=length(which(!is.na(qdat[PPP1$Tissue==TAG[j],i])))
+  }
+  if(all(ll >= 2)) {
+    BTpval[i] = bartlett.test(qdat[,i], PPP1$Tissue)$p.value
+  }
+}
+plot(-log10(BTpval), pch=16, cex=0.5, bty='l')
+
+pmat=matrix(NA, 6, ncol(indMPro[[1]]))
+pIdx=1
+layout(matrix(c(1,2,3,8,4,5,7,7,6), 3, 3))
+gc=array(0,6)
+
+for(i in 1:3) {
+  dn=indMPro[[i]]
+  for(j in (i+1):4) {
+    dm=indMPro[[j]]
+    for(k in 1:ncol(dn)) {
+      if( (length(which(!is.na(dn[,k]))) > 1) & (length(which(!is.na(dm[,k]))) >1)) {
+        ft= var.test(dn[,k], dm[,k], na.rm = T)
+        pmat[pIdx,k] = ft$p.value
+      }
+    }
+
+    hist(main=paste0(TAG[j], "/", TAG[i]), xlab="p-value (F test)", 
+         pmat[pIdx,which(!is.na(pmat[pIdx,]))], 
+         breaks = 20, col=pIdx)
+    abline(h=length(which(!is.na(pmat[pIdx,])))/20, lty=2, col="grey")
+    gc[pIdx]=qchisq(median(pmat[pIdx,], na.rm = T), df=1, lower.tail = F)/0.455
+    legend("topright", bty = 'n', legend = paste("GC=", format(gc[pIdx], digits = 3)))
+    pIdx=pIdx+1
+  }
+}
+
+pIdx=1
+for(i in 1:3) {
+  for(j in (i+1):4) {
+    if(pIdx==1) {
+      qqplot(bty='n', col=pIdx, ylim=c(0,70), xlab="Expected -log10(p)", ylab="Observed -log10(p)",
+             -log10(runif(length(which(pmat[pIdx,]<1)))),-log10(pmat[pIdx,]), pch=16, cex=0.5)
+      abline(a=0, b=1, col="grey", lty=2)
+    } else {
+      points(sort(-log10(runif(length(which(pmat[pIdx,]<1))))),sort(-log10(pmat[pIdx,])), col=pIdx, pch=16,cex=0.5)
+    }
+    pIdx=pIdx+1
+  }
+}
+legend("topleft", bty='n', legend = paste0("GC=", format(gc, digits=3)), pch=15, col=1:6)
+
+```
+
+```{r, pca, echo=FALSE, eval=TRUE}
+#generate correlation matrix
+print("Slide 4: PCA")
+
+pCorM=proCorMatrix(qdat)
+
+#######
+pEg=eigen(pCorM)
+#barplot(pEg$values[1:20], border = F)
+eVec=apply(pEg$vectors[,c(1,2)], 2, scale)
+eM=list("e1"=matrix(0, 4, 3), "e2"=matrix(0,4,3))
+for(i in 1:2) {
+  for(j in 1:length(TAG)) {
+    eM[[i]][j,1]=mean(eVec[PPP1$Tissue==TAG[j], i])
+    eM[[i]][j,2]=var(eVec[PPP1$Tissue==TAG[j], i])
+    eM[[i]][j,3]=abs(eM[[i]][j,1])^2+eM[[i]][j,2]
+  }
+}
+print(eM[[1]])
+print(eM[[2]])
+#pEvecPlot(pEg, c(1,2,3,4), COL=as.numeric(as.factor(PPP1$Tissue)))
+pEvecCat(pEg, PPP1$Tissue, c(1,2)) #tissue
+#pEvecCat(pEg, PPP1$MS_ID, c(1,2)) #tissue
+
+#pcaCatPlot(pEg, 5, PPP1$Tissue)
+#pcaCatPlot(pEg, 5, PPP1$MS_ID)
+
+#pVCA(pEg, 10, PPP1$Tissue)
+#pVCA(pEg, 10, PPP1$MS_ID)
+
+```
+
+```{r, vec, echo=FALSE, eval=FALSE}
+
+#####
+print("Slide 5: var of each eigen vector")
+SD=matrix(0, 4, ncol(pEg$vectors))
+layout(matrix(1:4, 2, 2))
+
+for(i in 1:4) {
+  dt=pEg$vectors[PPP1$Tissue==TAG[i],]
+  SD[i,]=apply(dt, 2, var)
+}
+
+for(i in 1:4) {
+  plot(main=TAG[i], xlab="Eigen index", ylab="Variance", ylim=c(0, max(SD)*1.1), SD[i,], 
+         pch=16, cex=0.5, col=i, bty='l')
+  ssL=smooth.spline(seq(1, ncol(SD)), SD[i,], df=7)
+  lines(ssL, lwd=2, lty=2, col="grey")
+}
+
+```
+
